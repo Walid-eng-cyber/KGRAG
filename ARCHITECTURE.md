@@ -227,6 +227,9 @@ KGRAG/
 └── src/
     ├── schema.py        # SEC ontology (entities, relations, validation)
     ├── edgar.py         # EDGAR download → clean text
+    ├── budget.py        # pre-flight cost/time estimator + budget ceiling
+    ├── pricing.py       # per-model price presets (auto-price paid models)
+    ├── cache.py         # document-hash cache (skip re-extraction)
     ├── ingest.py        # extraction pipeline → Neo4j   (Phase 1 entry point)
     ├── cleanup.py       # deterministic junk removal + exact-dupe merge
     ├── resolve.py       # entity resolution (embedding dedupe + aliases)
@@ -246,6 +249,8 @@ KGRAG/
 | `MAX_FILING_CHARS` | Per-filing extraction cap (cost/speed knob) | `12000` |
 | `EMBED_MODEL` | Local embedding model for entity resolution | `bge-m3` |
 | `RESOLVE_THRESHOLD` | Cosine cutoff for merging entities | `0.90` |
+| `PRICE_PER_1M_INPUT` / `_OUTPUT` | Token prices for the budget estimator | `0.0` |
+| `BUDGET_LIMIT_USD` | Ceiling that `budget.py` refuses to exceed | `10.0` |
 
 ---
 

@@ -53,6 +53,17 @@ valid triples. This is what separates a clean, queryable graph from noise.
 
 ## Run Phase 1
 
+**Always budget first.** This estimates tokens, chunks, time, and dollar cost
+per document *without* calling the model, marks already-cached documents, and
+refuses to green-light a run above `BUDGET_LIMIT_USD`:
+
+```bash
+python -m src.budget --tickers AAPL MSFT NVDA
+```
+
+Then extract. Documents whose content hash is already ingested are **skipped**
+(no re-extraction cost); use `--force` to re-run them:
+
 ```bash
 python -m src.ingest --tickers AAPL MSFT NVDA
 ```
@@ -86,6 +97,21 @@ Or explore visually in the Neo4j Browser (http://localhost:7474):
 MATCH (n) RETURN n LIMIT 100
 ```
 
+## Using a paid model safely (Claude, hosted APIs)
+We run local/free, but if you swap in a paid model the cost guardrails protect
+you automatically — you do **not** have to remember to run the budget script:
+
+- Known paid models are **auto-priced** (`src/pricing.py`) even if you never set
+  `PRICE_PER_1M_*`. A `$0` estimate on a paid model is treated as unsafe.
+- `src.ingest` runs a **built-in budget gate**: on any non-free model it prints
+  the estimate, **blocks** if it exceeds `BUDGET_LIMIT_USD` (a hard wall), and
+  otherwise **refuses to spend without `--yes`**:
+  ```bash
+  python -m src.ingest --tickers AAPL --yes   # authorize the estimated spend
+  ```
+- Local Ollama passes the gate silently (cost `$0`), so free runs have no
+  friction.
+
 ## Tuning knobs
 - `OLLAMA_MODEL` — defaults to `llama3.1:8b`. Bigger models (e.g. `qwen2.5:14b`)
   extract more accurately but run slower; smaller ones are faster.
@@ -93,8 +119,12 @@ MATCH (n) RETURN n LIMIT 100
   (default 12k chars) to keep local runs fast. Raise once it works.
 - `RESOLVE_THRESHOLD` — cosine cutoff (default `0.90`) for merging entities.
   Higher = stricter (fewer merges); use `--dry-run` to see scores and tune it.
-- Downloaded filing text is cached under `data/`, so re-running extraction does
-  not re-download from EDGAR.
+- `PRICE_PER_1M_INPUT` / `PRICE_PER_1M_OUTPUT` — set to your provider's rates to
+  get real dollar estimates from `src.budget` (default `0` for local Ollama).
+- `BUDGET_LIMIT_USD` — hard ceiling; `src.budget` blocks runs estimated above it.
+- Downloaded filing text is cached under `data/`, and extraction results are
+  cached by **document hash** (`data/ingest_manifest.json`) — re-running never
+  re-downloads or re-extracts unchanged filings.
 
 ## A note on local models
 A local 7–8B model is free but less accurate at strict structured extraction
