@@ -32,3 +32,13 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "kgrag-password")
 # --- EDGAR ---
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "KGRAG Research example@example.com")
 MAX_FILING_CHARS = int(os.getenv("MAX_FILING_CHARS", "60000"))
+
+# --- Cost / budget model (for the pre-flight estimator) ---
+# Price per 1M tokens. Local Ollama is free -> 0. Set these to your provider's
+# rates (e.g. a hosted model) to see real dollar estimates before a full run.
+PRICE_PER_1M_INPUT = float(os.getenv("PRICE_PER_1M_INPUT", "0.0"))
+PRICE_PER_1M_OUTPUT = float(os.getenv("PRICE_PER_1M_OUTPUT", "0.0"))
+# Hard ceiling: budget.py refuses to green-light a run estimated above this.
+BUDGET_LIMIT_USD = float(os.getenv("BUDGET_LIMIT_USD", "10.0"))
+# Measured wall-clock per chunk on this machine (for the local time estimate).
+SECONDS_PER_CHUNK = float(os.getenv("SECONDS_PER_CHUNK", "20.0"))

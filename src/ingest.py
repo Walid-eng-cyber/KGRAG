@@ -21,7 +21,10 @@ from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
 from llama_index.llms.ollama import Ollama
 
 import config
+from src.budget import estimate
+from src.cache import doc_hash, is_cached, record
 from src.edgar import fetch_10k_text
+from src.pricing import resolve_prices
 from src.schema import EXTRACTION_HINT, Entities, Relations, VALIDATION_SCHEMA
 
 DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA"]
@@ -67,22 +70,56 @@ def build_extractor(llm: Ollama) -> SchemaLLMPathExtractor:
     )
 
 
-def load_documents(tickers: list[str]) -> list[Document]:
+def load_documents(tickers: list[str], force: bool = False) -> list[Document]:
+    """Build Documents, skipping any whose content hash is already ingested
+    (cache hit) unless force=True."""
     docs: list[Document] = []
     for ticker in tickers:
         name, text = fetch_10k_text(ticker)
+        h = doc_hash(text)
+        if not force and is_cached(h):
+            print(f"  [cache] {ticker}: unchanged — skipping extraction ({h})")
+            continue
         docs.append(
             Document(
                 # Stable doc_id makes chunk ids (below) deterministic across runs.
                 doc_id=ticker.upper(),
                 text=f"{EXTRACTION_HINT}\n\nCompany: {name} ({ticker})\n\n{text}",
-                metadata={"ticker": ticker.upper(), "company": name, "source": "10-K"},
+                metadata={
+                    "ticker": ticker.upper(), "company": name,
+                    "source": "10-K", "content_hash": h,
+                },
             )
         )
     return docs
 
 
-def main(tickers: list[str]) -> None:
+def _budget_gate(documents: list[Document], assume_yes: bool) -> None:
+    """Stop a paid run from spending without a check. Free/local models pass
+    silently; any non-zero estimate must clear the ceiling AND be confirmed."""
+    price_in, price_out = resolve_prices(config.OLLAMA_MODEL)
+    total = sum(estimate(d.text, price_in, price_out)["cost"] for d in documents)
+    if total == 0.0:
+        return  # local / free model — no financial risk
+
+    print(f"\n  PAID MODEL: {config.OLLAMA_MODEL} "
+          f"(${price_in}/${price_out} per 1M tokens)")
+    print(f"  Estimated cost for {len(documents)} document(s): ${total:.2f}")
+    print(f"  Budget ceiling (BUDGET_LIMIT_USD): ${config.BUDGET_LIMIT_USD:.2f}")
+
+    if total > config.BUDGET_LIMIT_USD:
+        raise SystemExit(
+            f"  BLOCKED: ${total:.2f} exceeds the ${config.BUDGET_LIMIT_USD:.2f} "
+            f"ceiling. Trim the corpus, lower MAX_FILING_CHARS, or raise "
+            f"BUDGET_LIMIT_USD.")
+    if not assume_yes:
+        raise SystemExit(
+            "  HELD: paid extraction not confirmed. Review with "
+            "`python -m src.budget`, then re-run with --yes to authorize.")
+    print("  Confirmed (--yes). Proceeding.\n")
+
+
+def main(tickers: list[str], force: bool = False, assume_yes: bool = False) -> None:
     llm = build_llm()
     Settings.llm = llm  # ensure LlamaIndex never falls back to OpenAI
 
@@ -90,7 +127,14 @@ def main(tickers: list[str]) -> None:
     print(f"Neo4j: {config.NEO4J_URI}")
     print(f"Tickers: {', '.join(tickers)}\n")
 
-    documents = load_documents(tickers)
+    documents = load_documents(tickers, force=force)
+    if not documents:
+        print("\nNothing to extract — all documents are cached. Use --force to "
+              "re-extract. (Run `python -m src.budget` to preview cost first.)")
+        return
+
+    _budget_gate(documents, assume_yes)  # refuse to spend on a paid model unchecked
+
     graph_store = build_graph_store()
     extractor = build_extractor(llm)
 
@@ -110,11 +154,20 @@ def main(tickers: list[str]) -> None:
         ],
         show_progress=True,
     )
+
+    # Record what we extracted so the next run treats it as cached.
+    for doc in documents:
+        record(doc.metadata["content_hash"],
+               {"ticker": doc.metadata["ticker"], "company": doc.metadata["company"]})
     print("\nDone. Open http://localhost:7474 and run:  MATCH (n) RETURN n LIMIT 100")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract SEC 10-K graph into Neo4j.")
     parser.add_argument("--tickers", nargs="+", default=DEFAULT_TICKERS)
+    parser.add_argument("--force", action="store_true",
+                        help="re-extract even if the document hash is cached")
+    parser.add_argument("--yes", action="store_true",
+                        help="authorize spend on a paid model (see src.budget)")
     args = parser.parse_args()
-    main([t.upper() for t in args.tickers])
+    main([t.upper() for t in args.tickers], force=args.force, assume_yes=args.yes)
