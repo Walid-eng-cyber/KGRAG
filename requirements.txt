@@ -1,0 +1,19 @@
+# Core RAG / graph framework
+llama-index-core>=0.12.0
+llama-index-llms-ollama>=0.5.0
+llama-index-graph-stores-neo4j>=0.4.0
+
+# Local LLM runtime is Ollama (installed separately from https://ollama.com).
+# The python client is used directly for embeddings in entity resolution.
+ollama>=0.5.0
+
+# Graph database driver
+neo4j>=5.20.0
+
+# EDGAR download + HTML -> text
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Config
+python-dotenv>=1.0.0

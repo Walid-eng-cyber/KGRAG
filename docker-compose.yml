@@ -1,0 +1,23 @@
+# Local Neo4j for the knowledge graph.
+#   Start:  docker compose up -d
+#   Browser UI: http://localhost:7474  (user: neo4j / pass: kgrag-password)
+#   Bolt (used by the app): bolt://localhost:7687
+services:
+  neo4j:
+    image: neo4j:5.24
+    container_name: kgrag-neo4j
+    ports:
+      - "7474:7474"   # HTTP browser
+      - "7687:7687"   # Bolt driver
+    environment:
+      - NEO4J_AUTH=neo4j/kgrag-password
+      - NEO4J_PLUGINS=["apoc"]          # APOC procedures (used by LlamaIndex)
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
