@@ -24,10 +24,19 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 # same real-world thing. Tune per corpus with `python -m src.resolve --dry-run`.
 RESOLVE_THRESHOLD = float(os.getenv("RESOLVE_THRESHOLD", "0.90"))
 
-# --- Neo4j ---
+# --- Neo4j (the graph) ---
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "kgrag-password")
+
+# --- Postgres + pgvector (the vector index, Phase 2) ---
+PG_HOST = os.getenv("PG_HOST", "localhost")
+PG_PORT = int(os.getenv("PG_PORT", "5434"))
+PG_DB = os.getenv("PG_DB", "kgrag")
+PG_USER = os.getenv("PG_USER", "postgres")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "kgrag-password")
+# bge-m3 produces 1024-dim embeddings.
+VECTOR_DIM = int(os.getenv("VECTOR_DIM", "1024"))
 
 # --- EDGAR ---
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "KGRAG Research example@example.com")

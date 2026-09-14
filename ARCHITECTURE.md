@@ -233,6 +233,8 @@ KGRAG/
     ├── ingest.py        # extraction pipeline → Neo4j   (Phase 1 entry point)
     ├── cleanup.py       # deterministic junk removal + exact-dupe merge
     ├── resolve.py       # entity resolution (embedding dedupe + aliases)
+    ├── embeddings.py    # local bge-m3 embeddings (shared)
+    ├── vectorize.py     # Phase 2: build pgvector index from graph chunks
     └── verify.py        # Cypher sanity checks
 ```
 
@@ -245,6 +247,8 @@ KGRAG/
 | `OLLAMA_MODEL` | Local extraction model | `llama3.1:8b` |
 | `OLLAMA_BASE_URL` | Ollama endpoint | `http://localhost:11434` |
 | `NEO4J_URI` / `_USERNAME` / `_PASSWORD` | Graph DB connection | bolt://localhost:7687 |
+| `PG_HOST` / `PG_PORT` / `PG_DB` / `PG_USER` / `PG_PASSWORD` | pgvector connection | localhost / 5434 / kgrag |
+| `VECTOR_DIM` | Embedding dimension (bge-m3) | `1024` |
 | `SEC_USER_AGENT` | Required by EDGAR (name + email) | — |
 | `MAX_FILING_CHARS` | Per-filing extraction cap (cost/speed knob) | `12000` |
 | `EMBED_MODEL` | Local embedding model for entity resolution | `bge-m3` |
@@ -259,7 +263,7 @@ KGRAG/
 | Phase | Scope | Status |
 |---|---|---|
 | **1 — Extraction** | EDGAR → schema-constrained extraction → Neo4j → cleanup → entity resolution | ✅ Done |
-| **2 — Retrieval** | Natural-language querying: vector search (local `bge-m3` embeddings) + Text2Cypher over the graph | Planned |
+| **2 — Retrieval** | Vector index in pgvector (chunks + doc/section/date/entity metadata) ✅; Text2Cypher + hybrid retrieval next | In progress |
 | **3 — Answering** | Grounded answer generation with citations back to source chunks | Planned |
 | **4 — Scale & ops** | Full-filing ingest, more companies, incremental updates, access control | Planned |
 

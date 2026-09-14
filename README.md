@@ -91,6 +91,21 @@ Then inspect the graph:
 python -m src.verify
 ```
 
+## Phase 2 — build the vector index (pgvector)
+
+Embeds the same chunks into Postgres/pgvector alongside the graph, tagged with
+`doc_id`, `section_path`, `filing_date`, and the `entity_ids` each chunk mentions
+(the `chunk_id` is the join key back to Neo4j). Start Postgres (bundled in
+`docker compose`), then build:
+
+```bash
+docker compose up -d postgres
+python -m src.vectorize --query "supply chain and manufacturing risk"
+```
+
+`--query` runs a demo similarity search after building. Re-running is idempotent
+(upsert by `chunk_id`).
+
 Or explore visually in the Neo4j Browser (http://localhost:7474):
 
 ```cypher

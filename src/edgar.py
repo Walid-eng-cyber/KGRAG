@@ -75,20 +75,19 @@ def _html_to_text(html: str) -> str:
 _ITEM_HEADER = re.compile(r"\bItem\s+(\d+[A-C]?)\s*[\.\:]", re.IGNORECASE)
 
 
-def extract_narrative(text: str, items: tuple[str, ...] = ("1", "1A")) -> str | None:
-    """Pull the readable narrative sections out of a 10-K, skipping the XBRL
-    header and financial tables.
+ITEM_TITLES = {"1": "Item 1 - Business", "1A": "Item 1A - Risk Factors"}
 
-    A 10-K is organized into numbered Items. Item 1 (Business) and Item 1A
-    (Risk Factors) hold the relationship-rich prose we want — subsidiaries,
-    products, segments, competitors, risks. Each header appears at least twice
-    (once in the table of contents, once at the real section), so for each Item
-    we keep the *longest* slice, which is the actual section rather than the TOC
-    line.
+
+def narrative_sections(text: str, items: tuple[str, ...] = ("1", "1A")) -> dict[str, str]:
+    """Map each requested Item to its section text.
+
+    A 10-K is organized into numbered Items. Each header appears at least twice
+    (table of contents + the real section), so for each Item we keep the
+    *longest* slice — the actual section rather than the TOC line.
     """
     matches = list(_ITEM_HEADER.finditer(text))
     if len(matches) < 2:
-        return None  # couldn't parse structure — caller falls back
+        return {}
 
     longest: dict[str, str] = {}
     for i, m in enumerate(matches):
@@ -97,11 +96,28 @@ def extract_narrative(text: str, items: tuple[str, ...] = ("1", "1A")) -> str | 
         segment = text[m.start():end]
         if item not in longest or len(segment) > len(longest[item]):
             longest[item] = segment
+    return {it: longest[it] for it in items if it in longest}
 
-    # Give each requested section an equal share of the budget.
+
+def extract_narrative(text: str, items: tuple[str, ...] = ("1", "1A")) -> str | None:
+    """Concatenated narrative for extraction (Item 1 + Item 1A), each capped to
+    an equal share of the budget. Returns None if the structure can't be parsed
+    (caller falls back to a raw slice)."""
+    sections = narrative_sections(text, items)
+    if not sections:
+        return None
     per_section = max(4000, MAX_FILING_CHARS // len(items))
-    parts = [longest[it][:per_section] for it in items if it in longest]
+    parts = [sections[it][:per_section] for it in items if it in sections]
     return "\n\n".join(parts) if parts else None
+
+
+def latest_filing_date(ticker: str) -> str | None:
+    """Report/period date of the latest 10-K, parsed from the document name
+    (e.g. aapl-20250927.htm -> 2025-09-27)."""
+    cik = ticker_to_cik(ticker)
+    _, doc, _ = latest_10k(cik)
+    m = re.search(r"(\d{4})(\d{2})(\d{2})", doc)
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
 
 
 def fetch_10k_text(ticker: str) -> tuple[str, str]:

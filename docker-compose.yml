@@ -18,6 +18,21 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
 
+  # Postgres + pgvector: the vector index (Phase 2), alongside the graph.
+  #   Host port 5434 (5432/5433 are taken by other local projects).
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kgrag-postgres
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=kgrag-password
+      - POSTGRES_DB=kgrag
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
 volumes:
   neo4j_data:
   neo4j_logs:
+  pg_data:

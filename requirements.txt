@@ -10,6 +10,10 @@ ollama>=0.5.0
 # Graph database driver
 neo4j>=5.20.0
 
+# Vector index (Phase 2): Postgres + pgvector
+psycopg2-binary>=2.9.9
+pgvector>=0.3.0
+
 # EDGAR download + HTML -> text
 requests>=2.31.0
 beautifulsoup4>=4.12.0
