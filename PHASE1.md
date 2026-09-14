@@ -53,16 +53,50 @@ Everything runs locally for **$0** on open-source models.
 
 ## 2. The pipeline at a glance
 
+Data flows from SEC EDGAR through three **ingest** steps into Neo4j; two
+**refine** steps then clean the graph in place, and a final **verify** step reads
+it back. Everything left of Neo4j builds the graph; everything that touches
+Neo4j afterward improves or checks it.
+
+```mermaid
+flowchart TB
+    EDGAR[("SEC EDGAR<br/>10-K filings")]:::source
+
+    subgraph ING["INGEST — build the graph"]
+      direction LR
+      C["① Collect<br/>edgar.py<br/>fetch + parse Item 1 / 1A"]:::ingest
+      B["② Budget<br/>budget.py · pricing.py<br/>estimate cost · block overspend"]:::ingest
+      X["③ Extract<br/>ingest.py · schema.py<br/>LLM → schema-checked triples"]:::ingest
+      C --> B --> X
+    end
+
+    subgraph REF["REFINE — clean identities (free, no LLM cost)"]
+      direction LR
+      CL["④ Cleanup<br/>cleanup.py<br/>drop junk · merge exact dupes"]:::refine
+      RS["⑤ Resolve<br/>resolve.py<br/>embedding dedupe · aliases"]:::refine
+      CL --> RS
+    end
+
+    V["⑥ Verify<br/>verify.py<br/>Cypher sanity checks"]:::verify
+    NEO[("Neo4j<br/>knowledge graph")]:::store
+
+    EDGAR --> ING
+    ING -->|"MERGE writes"| NEO
+    NEO -->|"operate on graph"| REF
+    REF -->|"write back"| NEO
+    NEO -->|"read & validate"| V
+
+    classDef source fill:#e6f1fb,stroke:#185fa5,color:#042c53
+    classDef store fill:#eaf3de,stroke:#3b6d11,color:#173404
+    classDef ingest fill:#eeedfe,stroke:#534ab7,color:#26215c
+    classDef refine fill:#e1f5ee,stroke:#0f6e56,color:#04342c
+    classDef verify fill:#faeeda,stroke:#854f0b,color:#412402
 ```
-   ┌─────────┐   ┌────────┐   ┌─────────┐   ┌────────┐   ┌─────────┐   ┌─────────┐
-   │ collect │──▶│ budget │──▶│ extract │──▶│ cleanup│──▶│ resolve │──▶│ verify  │
-   │ EDGAR   │   │ gate   │   │ LLM+KG  │   │ junk/  │   │ dedupe/ │   │ Cypher  │
-   │ 10-K    │   │ cost   │   │ →Neo4j  │   │ dupes  │   │ aliases │   │ checks  │
-   └─────────┘   └────────┘   └─────────┘   └────────┘   └─────────┘   └─────────┘
-   edgar.py      budget.py     ingest.py     cleanup.py   resolve.py    verify.py
-                 pricing.py    schema.py
-                 cache.py      cache.py
-```
+
+**Reading it:** ① collect the filing → ② check the budget → ③ extract typed
+triples into Neo4j → ④ remove junk and merge obvious duplicates → ⑤ resolve
+fuzzy duplicates and record aliases → ⑥ verify. The graph (Neo4j) sits at the
+centre: step ③ writes it, steps ④–⑤ refine it, step ⑥ reads it.
 
 ---
 
