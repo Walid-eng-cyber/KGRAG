@@ -263,8 +263,8 @@ KGRAG/
 | Phase | Scope | Status |
 |---|---|---|
 | **1 — Extraction** | EDGAR → schema-constrained extraction → Neo4j → cleanup → entity resolution | ✅ Done |
-| **2 — Retrieval** | Vector index in pgvector (chunks + doc/section/date/entity metadata) ✅; Text2Cypher + hybrid retrieval next | In progress |
-| **3 — Answering** | Grounded answer generation with citations back to source chunks | Planned |
+| **2 — Vector index** | Build the vector index in pgvector alongside the graph (shared `chunk_id`, doc/section/date/entity metadata) + measured retrieval | ✅ Done |
+| **3 — Retrieval & answering** | Hybrid retriever (vector + graph) + Text2Cypher; grounded answers with citations | Planned |
 | **4 — Scale & ops** | Full-filing ingest, more companies, incremental updates, access control | Planned |
 
 ---

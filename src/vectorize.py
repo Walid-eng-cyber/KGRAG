@@ -148,27 +148,34 @@ def build() -> None:
     driver.close()
 
 
-def search(query: str, k: int = 5) -> None:
+def retrieve(query: str, k: int = 5) -> list[dict]:
+    """Vector top-k as structured rows (the vector retrieval path)."""
     conn = pg_connect()
-    qvec = embed_one(query)
+    qv = _vec(embed_one(query))
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT doc_id, section_path, filing_date,
-                   1 - (embedding <=> %s::vector) AS similarity,
-                   left(text, 140) AS snippet, entity_ids
+            SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
+                   1 - (embedding <=> %s::vector) AS similarity
             FROM chunk_embeddings
             ORDER BY embedding <=> %s::vector
             LIMIT %s;
             """,
-            (_vec(qvec), _vec(qvec), k),
+            (qv, qv, k),
         )
-        print(f"\nTop {k} chunks for: {query!r}\n" + "-" * 60)
-        for doc, sec, d, sim, snip, ents in cur.fetchall():
-            print(f"[{sim:.3f}] {doc} · {sec} · {d}")
-            print(f"   {_norm(snip)}…")
-            print(f"   entities: {', '.join(ents[:6])}\n")
+        cols = ["chunk_id", "doc_id", "section_path", "filing_date",
+                "text", "entity_ids", "similarity"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     conn.close()
+    return rows
+
+
+def search(query: str, k: int = 5) -> None:
+    print(f"\nTop {k} chunks for: {query!r}\n" + "-" * 60)
+    for r in retrieve(query, k):
+        print(f"[{r['similarity']:.3f}] {r['doc_id']} · {r['section_path']} · {r['filing_date']}")
+        print(f"   {_norm(r['text'][:140])}…")
+        print(f"   entities: {', '.join(r['entity_ids'][:6])}\n")
 
 
 if __name__ == "__main__":

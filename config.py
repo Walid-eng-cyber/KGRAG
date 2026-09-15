@@ -38,6 +38,12 @@ PG_PASSWORD = os.getenv("PG_PASSWORD", "kgrag-password")
 # bge-m3 produces 1024-dim embeddings.
 VECTOR_DIM = int(os.getenv("VECTOR_DIM", "1024"))
 
+# --- Router (Phase 3) ---
+# A small, cheap model classifies the question into a retrieval path.
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", "llama3.2")
+# Below this confidence, fall back to running BOTH paths and merging.
+ROUTER_CONFIDENCE_THRESHOLD = float(os.getenv("ROUTER_CONFIDENCE_THRESHOLD", "0.6"))
+
 # --- EDGAR ---
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "KGRAG Research example@example.com")
 MAX_FILING_CHARS = int(os.getenv("MAX_FILING_CHARS", "60000"))
