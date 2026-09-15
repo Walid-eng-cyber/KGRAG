@@ -26,8 +26,8 @@ import config
 # Each entry: cypher + how to fill it (entity_slots / list_slot / value_slot).
 TEMPLATES: dict[str, dict] = {
     "subsidiaries_of": {
-        "cypher": "MATCH (c:COMPANY {name:$name})-[:HAS_SUBSIDIARY]->(s) "
-                  "RETURN s.name AS subsidiary",
+        "cypher": "MATCH (c:COMPANY {name:$name})-[r:HAS_SUBSIDIARY]->(s) "
+                  "RETURN s.name AS subsidiary, r.triplet_source_id AS _src",
         "entity_slots": ["name"],
         "desc": "list the subsidiaries of a company",
     },
@@ -38,13 +38,14 @@ TEMPLATES: dict[str, dict] = {
         "desc": "how many subsidiaries a company has",
     },
     "risks_of": {
-        "cypher": "MATCH (c {name:$name})-[:FACES_RISK]->(r) RETURN r.name AS risk",
+        "cypher": "MATCH (c {name:$name})-[r:FACES_RISK]->(rk) "
+                  "RETURN rk.name AS risk, r.triplet_source_id AS _src",
         "entity_slots": ["name"],
         "desc": "the risks a company faces",
     },
     "executives_of": {
-        "cypher": "MATCH (c {name:$name})-[:HAS_EXECUTIVE]->(p) "
-                  "RETURN p.name AS executive",
+        "cypher": "MATCH (c {name:$name})-[r:HAS_EXECUTIVE]->(p) "
+                  "RETURN p.name AS executive, r.triplet_source_id AS _src",
         "entity_slots": ["name"],
         "desc": "the executives of a company",
     },
@@ -55,8 +56,8 @@ TEMPLATES: dict[str, dict] = {
         "desc": "the competitors of a company",
     },
     "regulators_of": {
-        "cypher": "MATCH (c {name:$name})-[:REGULATED_BY]->(a) "
-                  "RETURN a.name AS regulator",
+        "cypher": "MATCH (c {name:$name})-[r:REGULATED_BY]->(a) "
+                  "RETURN a.name AS regulator, r.triplet_source_id AS _src",
         "entity_slots": ["name"],
         "desc": "the regulators of a company",
     },

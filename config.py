@@ -44,6 +44,12 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "llama3.2")
 # Below this confidence, fall back to running BOTH paths and merging.
 ROUTER_CONFIDENCE_THRESHOLD = float(os.getenv("ROUTER_CONFIDENCE_THRESHOLD", "0.6"))
 
+# --- Answer generation (Phase 4) ---
+# A more capable model synthesizes the grounded, cited answer.
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "llama3.1:8b")
+# How many times to reject-and-regenerate an answer with a bad/missing citation.
+ANSWER_MAX_RETRIES = int(os.getenv("ANSWER_MAX_RETRIES", "2"))
+
 # --- EDGAR ---
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "KGRAG Research example@example.com")
 MAX_FILING_CHARS = int(os.getenv("MAX_FILING_CHARS", "60000"))
