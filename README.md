@@ -1,5 +1,49 @@
 # KGRAG — Knowledge Graph RAG for Enterprise Data (SEC filings)
 
+## Benchmark — GraphRAG vs plain vector RAG
+
+Same question set, same corpus, both systems grounded, all local models. Accuracy
+by difficulty (n = 36):
+
+![GraphRAG vs plain vector RAG — accuracy by difficulty](assets/benchmark_delta.png)
+
+| Difficulty | GraphRAG (ours) | Plain vector RAG | Delta |
+|---|---|---|---|
+| single_hop (1 hop) | 90% | 70% | +20pp |
+| two_hop (2 hop) | 25% | 50% | −25pp |
+| **three_hop (3 hop)** | **100%** | **0%** | **+100pp** |
+| **aggregation** | **60%** | **10%** | **+50pp** |
+| out_of_scope (should refuse) | 100% | 100% | +0pp |
+| **Overall** | **78%** | **56%** | **+22pp** |
+
+**The story:** rough parity on simple lookups, and a decisive win where it
+matters — **three-hop (+100pp)** and **aggregation (+50pp)**, exactly the questions
+vector search *structurally cannot* answer (it can't traverse relationships or
+count). Both refuse out-of-scope questions equally, because both are grounded.
+
+**The honest cost of that accuracy** — GraphRAG is slower per query and far more
+expensive to build:
+
+| | Plain vector RAG | GraphRAG (ours) |
+|---|---|---|
+| One-time ingestion (27 chunks) | **11.5 s** (embed only) | **~6–7 min** (LLM extraction + cleanup + entity resolution) |
+| Latency / query (median, local) | **8 s** | **25 s** |
+| Model calls / query | 2 (embed + answer) | 3–5 (router + graph plan + answer + citation checks) |
+| API cost | $0 (local) | $0 (local) |
+
+GraphRAG costs **~36× more to build** and **~3× more per query**. That's the price
+of answering the questions vanilla RAG can't — stating it plainly is what makes
+the accuracy claim credible.
+
+**Honest caveats:** small corpus (3 filings / 27 chunks) and keyword-based
+scoring. The `two_hop` dip is a genuine limitation — the query-template library
+doesn't cover those specific 2-hop chains, so GraphRAG *correctly abstains* while
+vanilla scores by keyword luck; a broader template set + a larger corpus would
+close it. Numbers are directional, not production-grade. Reproduce with
+`python -m src.benchmark --all`.
+
+---
+
 Phase 1: **extract entities and relationships from SEC 10-K filings into a Neo4j
 knowledge graph**, using a **local open-source LLM (Llama 3.1 via Ollama)** for
 schema-constrained extraction via LlamaIndex. Fully free — nothing calls a paid
