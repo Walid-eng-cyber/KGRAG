@@ -1,5 +1,12 @@
 # KGRAG — Knowledge Graph RAG for Enterprise Data (SEC filings)
 
+A local, open-source **GraphRAG** system that answers both *semantic* and
+*structural* questions over enterprise documents — and refuses what it can't
+support. It pairs a **knowledge graph** (Neo4j) with a **vector index**
+(pgvector), joined by a shared `chunk_id`, routes each question to the right
+store, and returns a **grounded, citation-validated** answer. Everything runs
+free and on-device via Ollama.
+
 ## Benchmark — GraphRAG vs plain vector RAG
 
 Same question set, same corpus, both systems grounded, all local models. Accuracy
@@ -7,7 +14,7 @@ by difficulty (n = 36):
 
 ![GraphRAG vs plain vector RAG — accuracy by difficulty](assets/benchmark_delta.png)
 
-| Difficulty | GraphRAG (ours) | Plain vector RAG | Delta |
+| Difficulty | GraphRAG | Plain vector RAG | Delta |
 |---|---|---|---|
 | single_hop (1 hop) | 90% | 70% | +20pp |
 | two_hop (2 hop) | 25% | 50% | −25pp |
@@ -24,185 +31,188 @@ count). Both refuse out-of-scope questions equally, because both are grounded.
 **The honest cost of that accuracy** — GraphRAG is slower per query and far more
 expensive to build:
 
-| | Plain vector RAG | GraphRAG (ours) |
+| | Plain vector RAG | GraphRAG |
 |---|---|---|
 | One-time ingestion (27 chunks) | **11.5 s** (embed only) | **~6–7 min** (LLM extraction + cleanup + entity resolution) |
 | Latency / query (median, local) | **8 s** | **25 s** |
 | Model calls / query | 2 (embed + answer) | 3–5 (router + graph plan + answer + citation checks) |
 | API cost | $0 (local) | $0 (local) |
 
-GraphRAG costs **~36× more to build** and **~3× more per query**. That's the price
-of answering the questions vanilla RAG can't — stating it plainly is what makes
-the accuracy claim credible.
+GraphRAG costs **~36× more to build** and **~3× more per query**. Stating that
+plainly is what makes the accuracy claim credible.
 
 **Honest caveats:** small corpus (3 filings / 27 chunks) and keyword-based
 scoring. The `two_hop` dip is a genuine limitation — the query-template library
 doesn't cover those specific 2-hop chains, so GraphRAG *correctly abstains* while
-vanilla scores by keyword luck; a broader template set + a larger corpus would
-close it. Numbers are directional, not production-grade. Reproduce with
-`python -m src.benchmark --all`.
+vanilla scores by keyword luck. Numbers are directional, not production-grade.
+Reproduce with `python -m src.benchmark --all`.
 
 ---
 
-Phase 1: **extract entities and relationships from SEC 10-K filings into a Neo4j
-knowledge graph**, using a **local open-source LLM (Llama 3.1 via Ollama)** for
-schema-constrained extraction via LlamaIndex. Fully free — nothing calls a paid
-API.
+## Architecture — five phases
+
+| Phase | What it does | Entry point | Doc |
+|---|---|---|---|
+| **1 — Extraction** | EDGAR 10-K → schema-constrained entity/relationship extraction → Neo4j; then cleanup + entity resolution | `src/ingest.py` | [PHASE1.md](PHASE1.md) |
+| **2 — Vector index** | Embed the same chunks into pgvector, tagged with doc/section/date/entity metadata (shared `chunk_id`) | `src/vectorize.py` | [PHASE2.md](PHASE2.md) |
+| **3 — Router** | A cheap classifier sends each question to vector, graph, or both; parameterized (injection-safe) graph queries; every decision logged | `src/router.py` | [PHASE3.md](PHASE3.md) |
+| **4 — Answer** | Verbalize graph facts + dedupe against passages → one labeled context → grounded answer with **validated citations** | `src/answer.py` | [PHASE4.md](PHASE4.md) |
+| **5 — Benchmark** | GraphRAG vs plain vector RAG on a difficulty-stratified set; latency + cost reported | `src/benchmark.py` | (this README, top) |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and diagrams.
 
 ```
-EDGAR 10-K  ->  clean text  ->  chunk  ->  Claude extraction (fixed ontology)
-            ->  triples  ->  Neo4j property graph  ->  verify with Cypher
-```
+EDGAR 10-K → chunk ─┬─ embed ───────────────→ pgvector (meaning)
+                    └─ extract entities+rels → Neo4j (structure)
+                              (shared chunk_id joins the two)
 
-## Why a fixed ontology?
-`src/schema.py` defines the only allowed entity types (COMPANY, PERSON, PRODUCT,
-SEGMENT, RISK, AUDITOR, LOCATION, GOVERNMENT_AGENCY, STOCK_EXCHANGE) and
-relationship types (HAS_SUBSIDIARY, COMPETES_WITH, HAS_EXECUTIVE, FACES_RISK,
-AUDITED_BY, ...). The extractor runs in `strict` mode, so the LLM can only emit
-valid triples. This is what separates a clean, queryable graph from noise.
+question → router → { vector | graph | both } → merge + verbalize
+                 → grounded answer with validated citations
+```
 
 ## Prerequisites
 - Python 3.10+
-- Docker (for local Neo4j) — or your own Neo4j instance
-- [Ollama](https://ollama.com) (free, runs the LLM locally)
+- Docker (runs Neo4j + Postgres/pgvector locally)
+- [Ollama](https://ollama.com) (runs all models locally, free)
 
 ## Setup
 
 1. **Install Ollama and pull the models**
    ```bash
-   ollama pull llama3.1:8b
-   ollama pull bge-m3
+   ollama pull llama3.1:8b   # extraction + answer generation
+   ollama pull llama3.2      # the cheap router classifier
+   ollama pull bge-m3        # embeddings (vectors + entity resolution)
    ```
-   `llama3.1:8b` does extraction; `bge-m3` does embeddings for entity
-   resolution. Ollama serves both at `http://localhost:11434`. `qwen2.5:7b` is a
-   good extraction alternative that often follows strict schemas better.
 
 2. **Config**
    ```bash
    cp .env.example .env
    ```
-   Edit `.env`: set a real `SEC_USER_AGENT` (SEC requires a name + contact
-   email, e.g. `Jane Doe jane@acme.com`). No API key needed.
+   Edit `.env`: set a real `SEC_USER_AGENT` (SEC requires a name + contact email,
+   e.g. `Jane Doe jane@acme.com`). No API key needed for the local stack.
 
 3. **Install Python deps**
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Start Neo4j**
+4. **Start the databases**
    ```bash
-   docker compose up -d
+   docker compose up -d          # Neo4j (7474/7687) + Postgres/pgvector (5434)
    ```
-   Browser UI at http://localhost:7474 (neo4j / kgrag-password).
+   Neo4j Browser: http://localhost:7474 (neo4j / kgrag-password).
 
-## Run Phase 1
+## Run it end to end
 
-**Always budget first.** This estimates tokens, chunks, time, and dollar cost
-per document *without* calling the model, marks already-cached documents, and
-refuses to green-light a run above `BUDGET_LIMIT_USD`:
-
+### Phase 1 — build the graph
 ```bash
-python -m src.budget --tickers AAPL MSFT NVDA
+python -m src.budget  --tickers AAPL MSFT NVDA   # pre-flight cost/time estimate
+python -m src.ingest  --tickers AAPL MSFT NVDA   # extract → Neo4j (hash-cached)
+python -m src.cleanup                            # drop junk + merge exact dupes
+python -m src.resolve --dry-run                  # preview fuzzy-merge scores
+python -m src.resolve                            # merge (Acme Corp == ACME) + aliases
+python -m src.verify                             # Cypher sanity checks
 ```
 
-Then extract. Documents whose content hash is already ingested are **skipped**
-(no re-extraction cost); use `--force` to re-run them:
-
+### Phase 2 — build the vector index
 ```bash
-python -m src.ingest --tickers AAPL MSFT NVDA
-```
-
-Clean up junk + exact duplicates:
-
-```bash
-python -m src.cleanup
-```
-
-Resolve fuzzy duplicates (`Acme Corp` == `ACME`) and attach alias lists. Preview
-scores first to tune the threshold, then apply:
-
-```bash
-python -m src.resolve --dry-run
-```
-
-```bash
-python -m src.resolve
-```
-
-Then inspect the graph:
-
-```bash
-python -m src.verify
-```
-
-## Phase 2 — build the vector index (pgvector)
-
-Embeds the same chunks into Postgres/pgvector alongside the graph, tagged with
-`doc_id`, `section_path`, `filing_date`, and the `entity_ids` each chunk mentions
-(the `chunk_id` is the join key back to Neo4j). Start Postgres (bundled in
-`docker compose`), then build:
-
-```bash
-docker compose up -d postgres
 python -m src.vectorize --query "supply chain and manufacturing risk"
 ```
+`--query` runs a demo similarity search after building. Idempotent (upsert by
+`chunk_id`).
 
-`--query` runs a demo similarity search after building. Re-running is idempotent
-(upsert by `chunk_id`).
-
-Or explore visually in the Neo4j Browser (http://localhost:7474):
-
-```cypher
-MATCH (n) RETURN n LIMIT 100
+### Phase 3 — route a question
+```bash
+python -m src.router     # demo: routes several questions to vector/graph/both
 ```
 
+### Phase 4 — get a grounded, cited answer
+```bash
+python -m src.answer     # demo: full grounded answers with [G#]/[P#] citations
+```
+
+### The frontend (Streamlit)
+A UI whose visualization adapts to how the answer was produced (graph diagram /
+similarity bars / hybrid tabs):
+```bash
+streamlit run app.py     # http://localhost:8501
+```
+
+### Phase 5 — benchmark
+```bash
+python -m src.benchmark          # fast demo subset
+python -m src.benchmark --all    # full stratified set
+```
+
+## Evaluation harnesses
+- `python -m src.eval_retrieval` — retrieval recall@k + HNSW `ef_search` sweep.
+- `python -m src.eval_router` — routing accuracy on a labeled question set + confusion matrix.
+
 ## Using a paid model safely (Claude, hosted APIs)
-We run local/free, but if you swap in a paid model the cost guardrails protect
-you automatically — you do **not** have to remember to run the budget script:
-
+Everything runs local/free, but if you swap in a paid model the cost guardrails
+protect you automatically:
 - Known paid models are **auto-priced** (`src/pricing.py`) even if you never set
-  `PRICE_PER_1M_*`. A `$0` estimate on a paid model is treated as unsafe.
+  `PRICE_PER_1M_*`; a `$0` estimate on a paid model is treated as unsafe.
 - `src.ingest` runs a **built-in budget gate**: on any non-free model it prints
-  the estimate, **blocks** if it exceeds `BUDGET_LIMIT_USD` (a hard wall), and
-  otherwise **refuses to spend without `--yes`**:
-  ```bash
-  python -m src.ingest --tickers AAPL --yes   # authorize the estimated spend
-  ```
-- Local Ollama passes the gate silently (cost `$0`), so free runs have no
-  friction.
+  the estimate, **blocks** above `BUDGET_LIMIT_USD`, and otherwise refuses to
+  spend without `--yes`.
+- Local Ollama passes the gate silently (`$0`), so free runs have no friction.
 
-## Tuning knobs
-- `OLLAMA_MODEL` — defaults to `llama3.1:8b`. Bigger models (e.g. `qwen2.5:14b`)
-  extract more accurately but run slower; smaller ones are faster.
-- `MAX_FILING_CHARS` — caps how much of each 10-K is sent for extraction
-  (default 12k chars) to keep local runs fast. Raise once it works.
-- `RESOLVE_THRESHOLD` — cosine cutoff (default `0.90`) for merging entities.
-  Higher = stricter (fewer merges); use `--dry-run` to see scores and tune it.
-- `PRICE_PER_1M_INPUT` / `PRICE_PER_1M_OUTPUT` — set to your provider's rates to
-  get real dollar estimates from `src.budget` (default `0` for local Ollama).
-- `BUDGET_LIMIT_USD` — hard ceiling; `src.budget` blocks runs estimated above it.
-- Downloaded filing text is cached under `data/`, and extraction results are
-  cached by **document hash** (`data/ingest_manifest.json`) — re-running never
-  re-downloads or re-extracts unchanged filings.
+## Configuration (`.env`) & tuning
+| Variable | Purpose | Default |
+|---|---|---|
+| `OLLAMA_MODEL` | Extraction model | `llama3.1:8b` |
+| `ANSWER_MODEL` | Answer synthesis model | `llama3.1:8b` |
+| `ROUTER_MODEL` | Cheap router classifier | `llama3.2` |
+| `EMBED_MODEL` | Embeddings | `bge-m3` |
+| `MAX_FILING_CHARS` | Per-filing extraction cap | `20000` |
+| `RESOLVE_THRESHOLD` | Cosine cutoff for entity merges | `0.90` |
+| `ROUTER_CONFIDENCE_THRESHOLD` | Below this → run both paths | `0.60` |
+| `ANSWER_MAX_RETRIES` | Reject-and-regenerate on bad citations | `2` |
+| `NEO4J_*` / `PG_*` | DB connections | see `.env.example` |
+| `PRICE_PER_1M_*` / `BUDGET_LIMIT_USD` | Cost model / ceiling for paid models | `0` / `10` |
 
-## A note on local models
-A local 7–8B model is free but less accurate at strict structured extraction
-than a hosted frontier model. Expect to miss some triples and occasionally see a
-malformed one. The `strict` schema (`src/schema.py`) filters out invalid shapes,
-which helps a lot. If quality is poor, try `qwen2.5:7b`/`14b` or lower
-`MAX_FILING_CHARS` so each chunk is easier to reason over.
+Downloaded filing text is cached under `data/`, and extraction results are cached
+by **document hash** (`data/ingest_manifest.json`) — re-running never
+re-downloads or re-extracts unchanged filings.
 
 ## Project layout
 ```
 config.py            # env-driven configuration
-docker-compose.yml   # local Neo4j + APOC
-src/schema.py        # the SEC ontology (entity/relation/validation schema)
-src/edgar.py         # download 10-Ks from EDGAR, HTML -> clean text
-src/ingest.py        # extraction -> Neo4j (the main Phase 1 entry point)
-src/verify.py        # Cypher sanity checks on the built graph
+docker-compose.yml   # Neo4j + APOC, Postgres + pgvector
+app.py               # Streamlit UI (path-adaptive visualization)
+src/
+├── schema.py        # SEC ontology (entities, relations, validation)
+├── edgar.py         # EDGAR download + narrative-section extraction
+├── pricing.py       # per-model price presets (cost safety)
+├── cache.py         # document-hash cache / manifest
+├── budget.py        # pre-flight cost/time estimator + ceiling
+├── ingest.py        # Phase 1: extraction → Neo4j (entry point)
+├── cleanup.py       # junk removal + exact-duplicate merge
+├── resolve.py       # entity resolution (embedding dedupe + aliases)
+├── embeddings.py    # local bge-m3 embeddings (shared)
+├── vectorize.py     # Phase 2: build the pgvector index
+├── verify.py        # Cypher sanity checks
+├── graph_query.py   # Phase 3: parameterized template library (safe graph path)
+├── router.py        # Phase 3: classify → route → log
+├── routerlog.py     # append-only routing decision log
+├── answer.py        # Phase 4: verbalize + dedupe + label + generate + validate
+├── benchmark.py     # Phase 5: GraphRAG vs plain vector RAG
+├── eval_retrieval.py# recall@k + ef_search sweep
+└── eval_router.py   # routing accuracy + confusion matrix
 ```
 
-## Next (Phase 2, later)
-Turn on node embeddings (`embed_kg_nodes=True`) and add a retriever that
-combines vector search + Text2Cypher over this graph to answer natural-language
-questions.
+## Honest limitations
+- **Local-model extraction is noisy.** The strict schema filters invalid *shapes*
+  but not wrong *values* (`"subsidiary name"`, a product mislabeled as a
+  subsidiary). A bigger model or a verification pass would help.
+- **Small corpus** (3 filings) — everything above is directional, not
+  production-grade.
+- **The graph query planner is non-deterministic** and its template library is
+  finite; unusual multi-hop questions fail closed (safe, but a coverage gap).
+- **Latency** — the first query is slow while Ollama swaps models; warm queries
+  are faster.
+
+## Documentation
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full system design + diagrams
+- [PHASE1.md](PHASE1.md) · [PHASE2.md](PHASE2.md) · [PHASE3.md](PHASE3.md) · [PHASE4.md](PHASE4.md) — detailed per-phase references
