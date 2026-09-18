@@ -148,16 +148,6 @@ python -m src.benchmark --all    # full stratified set
 - `python -m src.eval_retrieval` — retrieval recall@k + HNSW `ef_search` sweep.
 - `python -m src.eval_router` — routing accuracy on a labeled question set + confusion matrix.
 
-## Using a paid model safely (Claude, hosted APIs)
-Everything runs local/free, but if you swap in a paid model the cost guardrails
-protect you automatically:
-- Known paid models are **auto-priced** (`src/pricing.py`) even if you never set
-  `PRICE_PER_1M_*`; a `$0` estimate on a paid model is treated as unsafe.
-- `src.ingest` runs a **built-in budget gate**: on any non-free model it prints
-  the estimate, **blocks** above `BUDGET_LIMIT_USD`, and otherwise refuses to
-  spend without `--yes`.
-- Local Ollama passes the gate silently (`$0`), so free runs have no friction.
-
 ## Configuration (`.env`) & tuning
 | Variable | Purpose | Default |
 |---|---|---|
@@ -206,8 +196,6 @@ src/
 - **Local-model extraction is noisy.** The strict schema filters invalid *shapes*
   but not wrong *values* (`"subsidiary name"`, a product mislabeled as a
   subsidiary). A bigger model or a verification pass would help.
-- **Small corpus** (3 filings) — everything above is directional, not
-  production-grade.
 - **The graph query planner is non-deterministic** and its template library is
   finite; unusual multi-hop questions fail closed (safe, but a coverage gap).
 - **Latency** — the first query is slow while Ollama swaps models; warm queries
