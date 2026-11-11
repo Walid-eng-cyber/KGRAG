@@ -12,7 +12,7 @@ neo4j>=5.20.0
 
 # Vector index (Phase 2): Postgres + pgvector
 psycopg2-binary>=2.9.9
-pgvector>=0.3.0
+pgvector>=0.5.1
 
 # EDGAR download + HTML -> text
 requests>=2.31.0
