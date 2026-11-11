@@ -12,6 +12,11 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
+    ignore:
+      # llama-index-graph-stores-neo4j requires neo4j<6; a neo4j>=6 floor makes
+      # requirements.txt uninstallable. Remove once llama-index supports neo4j 6.
+      - dependency-name: neo4j
+        update-types: ["version-update:semver-major"]
 
   # All GitHub Actions updates arrive as ONE monthly PR into dev.
   - package-ecosystem: github-actions

@@ -39,7 +39,7 @@ Example questions the graph is designed to serve:
 | Orchestration | **LlamaIndex** (`PropertyGraphIndex`, `SchemaLLMPathExtractor`) | Free (OSS) |
 | Graph database | **Neo4j 5 Community** + APOC (Docker) | Free |
 | Data source | **SEC EDGAR** REST API | Free (public) |
-| Language | Python 3.10+ | Free |
+| Language | Python 3.11+ | Free |
 
 ---
 

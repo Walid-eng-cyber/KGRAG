@@ -74,7 +74,7 @@ question → router → { vector | graph | both } → merge + verbalize
 ```
 
 ## Prerequisites
-- Python 3.10+
+- Python 3.11+
 - Docker (runs Neo4j + Postgres/pgvector locally)
 - [Ollama](https://ollama.com) (runs all models locally, free)
 
