@@ -21,7 +21,7 @@ lxml>=5.0.0
 
 # Frontend (Phase 4 UI)
 streamlit>=1.30.0
-pandas>=2.0.0
+pandas>=3.1.1
 
 # Config
 python-dotenv>=1.0.0
