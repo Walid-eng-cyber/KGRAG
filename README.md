@@ -1,5 +1,7 @@
 # KGRAG — Knowledge Graph RAG for Enterprise Data (SEC filings)
 
+[![CI](https://github.com/Walid-eng-cyber/KGRAG/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Walid-eng-cyber/KGRAG/actions/workflows/ci.yml)
+
 A local, open-source **GraphRAG** system that answers both *semantic* and
 *structural* questions over enterprise documents — and refuses what it can't
 support. It pairs a **knowledge graph** (Neo4j) with a **vector index**
@@ -201,6 +203,14 @@ src/
 - **Latency** — the first query is slow while Ollama swaps models; warm queries
   are faster.
 
+## Development workflow
+`main` is production and only receives releases; `dev` is the default branch
+where all work lands first. Branch from `dev` (`feat/…`, `fix/…`), open a PR
+back into `dev`, and release by merging `dev` into `main` and tagging
+`vX.Y.Z`. Urgent production fixes go `hotfix/*` → `main`, then back into
+`dev`. Full rules in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Documentation
 - [ARCHITECTURE.md](ARCHITECTURE.md) — full system design + diagrams
 - [PHASE1.md](PHASE1.md) · [PHASE2.md](PHASE2.md) · [PHASE3.md](PHASE3.md) · [PHASE4.md](PHASE4.md) — detailed per-phase references
+- [CONTRIBUTING.md](CONTRIBUTING.md) — branches, releases, hotfixes, CI
