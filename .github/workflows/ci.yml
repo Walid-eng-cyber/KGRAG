@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install ruff
+        run: pip install ruff==0.17.4
+      - name: Ruff (syntax errors and undefined names)
+        run: ruff check --select E9,F63,F7,F82 --target-version py310 .
+      - name: Byte-compile every file
+        run: python -m compileall -q src app.py config.py
+
+  imports:
+    name: imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Import every module (no databases or Ollama needed)
+        run: |
+          python - <<'EOF'
+          import importlib
+          import pkgutil
+
+          import config  # noqa: F401
+          import src
+
+          names = [m.name for m in pkgutil.iter_modules(src.__path__)]
+          for name in names:
+              importlib.import_module(f"src.{name}")
+          print(f"imported config + {len(names)} modules: {', '.join(names)}")
+          EOF

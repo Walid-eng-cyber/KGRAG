@@ -1,0 +1,24 @@
+name: Branch policy
+
+# main only receives releases (from dev) and urgent fixes (from hotfix/*).
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  source-branch:
+    name: source-branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only dev or hotfix/* may merge into main
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REF" = "dev" ] || [[ "$HEAD_REF" == hotfix/* ]]; then
+            echo "OK: $HEAD_REF -> main"
+          else
+            echo "::error::PRs into main must come from 'dev' (release) or 'hotfix/*'. Got '$HEAD_REF'. Target 'dev' instead."
+            exit 1
+          fi
