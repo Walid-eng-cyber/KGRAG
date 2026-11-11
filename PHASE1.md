@@ -109,14 +109,14 @@ centre: step ③ writes it, steps ④–⑤ refine it, step ⑥ reads it.
 | Embeddings | Ollama + `bge-m3` | Entity-resolution similarity | Free (local) |
 | Orchestration | LlamaIndex (`PropertyGraphIndex`, `SchemaLLMPathExtractor`) | Chunking, schema-constrained extraction, graph upsert | Free (OSS) |
 | Graph database | Neo4j 5 Community + APOC (Docker) | Stores the graph | Free |
-| Language | Python 3.10+ | Pipeline code | Free |
+| Language | Python 3.11+ | Pipeline code | Free |
 
 ---
 
 ## 4. Prerequisites & setup
 
 **Prerequisites**
-- Python 3.10+
+- Python 3.11+
 - Docker (for local Neo4j) — or a reachable Neo4j instance
 - [Ollama](https://ollama.com) (runs the models locally)
 
