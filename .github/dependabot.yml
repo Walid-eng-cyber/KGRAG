@@ -1,21 +1,32 @@
 version: 2
 updates:
+  # All Python dependency updates arrive as ONE weekly PR into dev.
   - package-ecosystem: pip
     directory: /
     target-branch: dev
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message:
       prefix: chore
     groups:
-      llama-index:
-        patterns: ["llama-index*"]
+      python-dependencies:
+        patterns: ["*"]
+    ignore:
+      # llama-index-graph-stores-neo4j requires neo4j<6; a neo4j>=6 floor makes
+      # requirements.txt uninstallable. Remove once llama-index supports neo4j 6.
+      - dependency-name: neo4j
+        update-types: ["version-update:semver-major"]
 
+  # All GitHub Actions updates arrive as ONE monthly PR into dev.
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
     schedule:
       interval: monthly
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
+    groups:
+      github-actions:
+        patterns: ["*"]

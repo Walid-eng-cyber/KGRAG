@@ -1,6 +1,7 @@
 # KGRAG — Knowledge Graph RAG for Enterprise Data (SEC filings)
 
 [![CI](https://github.com/Walid-eng-cyber/KGRAG/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Walid-eng-cyber/KGRAG/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A local, open-source **GraphRAG** system that answers both *semantic* and
 *structural* questions over enterprise documents — and refuses what it can't
@@ -73,7 +74,7 @@ question → router → { vector | graph | both } → merge + verbalize
 ```
 
 ## Prerequisites
-- Python 3.10+
+- Python 3.11+
 - Docker (runs Neo4j + Postgres/pgvector locally)
 - [Ollama](https://ollama.com) (runs all models locally, free)
 
@@ -214,3 +215,6 @@ back into `dev`, and release by merging `dev` into `main` and tagging
 - [ARCHITECTURE.md](ARCHITECTURE.md) — full system design + diagrams
 - [PHASE1.md](PHASE1.md) · [PHASE2.md](PHASE2.md) · [PHASE3.md](PHASE3.md) · [PHASE4.md](PHASE4.md) — detailed per-phase references
 - [CONTRIBUTING.md](CONTRIBUTING.md) — branches, releases, hotfixes, CI
+
+## License
+[MIT](LICENSE)
