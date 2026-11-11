@@ -72,6 +72,10 @@ Every PR to `dev` or `main` runs:
 
 Before opening a PR that touches retrieval, routing or answering, also run the relevant harness locally (`python -m src.eval_router`, `python -m src.eval_retrieval`, or `python -m src.benchmark`) and mention the result in the PR.
 
+## Dependency updates
+
+Dependabot opens at most two grouped PRs into `dev`: one weekly PR with all Python updates and one monthly PR with all GitHub Actions updates. CI only proves every module still imports, so for major version bumps (e.g. `neo4j`, `pandas`, `pgvector`), run the pipeline locally before merging.
+
 ## Never commit
 
 `.env`, API keys, database passwords, or downloaded filings under `data/`.
