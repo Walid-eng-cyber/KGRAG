@@ -1,4 +1,4 @@
-import type { AskResponse, Benchmark, Health, Meta, User } from "./types";
+import type { Account, AccountStatus, AskResponse, Benchmark, Health, Meta, User } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -36,7 +36,27 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ credential }),
     }),
+  signUpWithGoogle: (credential: string, updates_opt_in: boolean) =>
+    request<{ user: User }>("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential, updates_opt_in }),
+    }),
   signOut: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  setUpdates: (opt_in: boolean) =>
+    request<{ user: User }>("/api/me/updates", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ opt_in }),
+    }),
+  adminUsers: (status?: AccountStatus) =>
+    request<{ users: Account[] }>(`/api/admin/users${status ? `?status=${status}` : ""}`),
+  adminSetStatus: (email: string, status: AccountStatus) =>
+    request<{ user: User }>(`/api/admin/users/${encodeURIComponent(email)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
   health: () => request<Health>("/api/health"),
   benchmark: () => request<Benchmark>("/api/benchmark"),
   ask: (question: string, signal?: AbortSignal) =>

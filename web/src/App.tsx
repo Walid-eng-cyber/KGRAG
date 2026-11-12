@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { AskPage } from "./pages/AskPage";
+import { AdminPage } from "./pages/AdminPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { LoginPage } from "./pages/LoginPage";
 import type { Health, Meta, User } from "./types";
 
-const pageFromHash = (): Page => (window.location.hash === "#/benchmark" ? "benchmark" : "ask");
+const pageFromHash = (): Page =>
+  window.location.hash === "#/benchmark" ? "benchmark" : window.location.hash === "#/admin" ? "admin" : "ask";
 
 type Session = "loading" | "signed-out" | "ready";
 
@@ -51,28 +53,38 @@ export default function App() {
     setUser(null);
     setSession("signed-out");
   };
+  const toggleUpdates = async (on: boolean) => {
+    try {
+      setUser((await api.setUpdates(on)).user);
+    } catch {
+      /* keep the old value; a 401 already sends the user back to sign-in */
+    }
+  };
   const navigate = (p: Page) => {
-    window.location.hash = p === "benchmark" ? "#/benchmark" : "#/";
+    window.location.hash = p === "ask" ? "#/" : `#/${p}`;
     setPage(p);
   };
 
   if (session === "loading") return <div className="empty" aria-busy="true">Loading…</div>;
   if (session === "signed-out" && meta?.auth.client_id) {
-    return <LoginPage clientId={meta.auth.client_id} onSignedIn={onSignedIn} />;
+    return <LoginPage clientId={meta.auth.client_id} consentText={meta.auth.consent_text} onSignedIn={onSignedIn} />;
   }
 
   return (
     <div className="shell">
-      <Sidebar page={page} onNavigate={navigate} meta={meta} health={health} user={user} onSignOut={signOut} />
+      <Sidebar page={page} onNavigate={navigate} meta={meta} health={health} user={user} onSignOut={signOut} onToggleUpdates={toggleUpdates} />
       <main className="main">
         <div className="topline">
           <div className="crumb">
-            {page === "ask" ? <>Ask <b>/ grounded answer</b></> : <>Benchmark <b>/ GraphRAG vs plain vector RAG</b></>}
+            {page === "ask" ? <>Ask <b>/ grounded answer</b></>
+              : page === "admin" ? <>Accounts <b>/ sign-ups and access</b></>
+              : <>Benchmark <b>/ GraphRAG vs plain vector RAG</b></>}
           </div>
           {meta?.demo ? <span className="pill demo">Demo mode · sample data</span>
             : <span className="pill local">All models on-device · $0 per query</span>}
         </div>
-        {page === "ask" ? <AskPage meta={meta} /> : <BenchmarkPage />}
+        {page === "admin" && user?.role === "admin" ? <AdminPage me={user} />
+          : page === "benchmark" ? <BenchmarkPage /> : <AskPage meta={meta} />}
       </main>
     </div>
   );

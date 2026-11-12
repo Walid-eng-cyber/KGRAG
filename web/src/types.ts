@@ -85,15 +85,26 @@ export interface Example {
   question: string;
 }
 
+export type AccountStatus = "pending" | "approved" | "rejected" | "disabled";
+
 export interface User {
   email: string;
   name: string;
   picture?: string | null;
+  role: "user" | "admin";
+  status: AccountStatus;
+  updates_opt_in: boolean;
+}
+
+export interface Account extends User {
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
 }
 
 export interface Meta {
   demo: boolean;
-  auth: { enabled: boolean; client_id: string | null };
+  auth: { enabled: boolean; client_id: string | null; consent_text: string };
   examples: Example[];
   tickers: string[];
   models: { router: string; answer: string; embed: string };

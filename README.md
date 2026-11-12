@@ -156,27 +156,43 @@ and `cd web && npm run dev` (http://localhost:5173, proxies `/api`).
 No databases or models yet? `KGRAG_DEMO=1 uvicorn server.main:app --port 8000`
 serves clearly labelled sample answers.
 
-#### Sign-in (optional, for anything not on localhost)
+#### Accounts: sign up with Google, admin approval (optional)
 With `GOOGLE_CLIENT_ID` unset the web UI is open, which is fine on your own
-machine. To require sign-in:
+machine. To require accounts:
 
 1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
    create an **OAuth client ID** of type *Web application* and add your site's
-   URL (e.g. `https://kgrag.example.com`, or `http://localhost:8000` for
-   testing) under **Authorized JavaScript origins**.
+   URL (e.g. `https://kgrag.example.com`, or `http://localhost:8000` and
+   `http://localhost` for testing) under **Authorized JavaScript origins**.
 2. Set these in `.env`:
    ```bash
    GOOGLE_CLIENT_ID=<the client id>
-   ALLOWED_EMAILS=you@gmail.com,colleague@gmail.com
+   ADMIN_EMAILS=you@gmail.com
    SESSION_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(48))">
    COOKIE_SECURE=1        # 0 only when testing over plain http://localhost
    ```
-3. Restart the API. Visitors now get a **Sign in with Google** screen.
+3. Restart the API.
 
-Only Google accounts on `ALLOWED_EMAILS` whose email Google has verified get
-in. The server verifies Google's signed ID token, then sets an HttpOnly
-session cookie (12 h by default); no passwords are stored. `/api/ask` is also
-rate-limited per user (`RATE_LIMIT_PER_MIN`, default 10).
+How access works:
+- **Create account**: a visitor signs up with Google. Google confirms the
+  email address; the account is stored as *pending* in `data/users.db`.
+- **Approval**: an admin approves it on the **Accounts** page, or with
+  `python -m server.users list --status pending` and
+  `python -m server.users approve someone@gmail.com`.
+- **Sign in**: only approved accounts can sign in. Rejecting or disabling an
+  account takes effect on its next request.
+- Admins in `ADMIN_EMAILS` are approved automatically and can sign in without
+  signing up first.
+
+The server verifies Google's signed ID token and keeps an HttpOnly session
+cookie (12 h by default); no passwords are stored. `/api/ask` is rate-limited
+per user (`RATE_LIMIT_PER_MIN`, default 10).
+
+**Update emails (opt-in).** The sign-up form has an unchecked "email me about
+updates" box. Ticking it stores the consent time and the exact wording shown;
+users can turn it off from their account, and every account has a one-click
+unsubscribe link (`/api/unsubscribe?token=…`). Only approved accounts that
+opted in count as subscribers. Sending the emails is not built yet.
 
 ### Phase 5 — benchmark
 ```bash

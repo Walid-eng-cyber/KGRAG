@@ -27,55 +27,129 @@ function loadGsi(): Promise<void> {
   });
 }
 
-export function LoginPage({ clientId, onSignedIn }: { clientId: string; onSignedIn: (u: User) => void }) {
+type Mode = "signin" | "signup";
+type Notice = { kind: "error" | "info"; text: string; offerSignup?: boolean } | null;
+
+interface Props {
+  clientId: string;
+  consentText: string;
+  onSignedIn: (u: User) => void;
+}
+
+export function LoginPage({ clientId, consentText, onSignedIn }: Props) {
   const buttonRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("signin");
+  const [optIn, setOptIn] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
+  const [requested, setRequested] = useState<User | null>(null);
+  // Google calls back long after render; read the current choices from refs.
+  const modeRef = useRef(mode);
+  const optInRef = useRef(optIn);
+  modeRef.current = mode;
+  optInRef.current = optIn;
 
   useEffect(() => {
     let cancelled = false;
     loadGsi()
       .then(() => {
-        if (cancelled || !buttonRef.current || !window.google) return;
+        if (cancelled || !window.google) return;
         window.google.accounts.id.initialize({
           client_id: clientId,
           ux_mode: "popup",
           callback: async ({ credential }) => {
-            if (!credential) return setError("Google didn't return a sign-in. Please try again.");
+            if (!credential) return setNotice({ kind: "error", text: "Google didn't return a sign-in. Please try again." });
             setBusy(true);
-            setError(null);
+            setNotice(null);
             try {
-              onSignedIn((await api.signInWithGoogle(credential)).user);
+              if (modeRef.current === "signup") {
+                const { user } = await api.signUpWithGoogle(credential, optInRef.current);
+                if (user.status === "approved") onSignedIn(user);
+                else setRequested(user);
+              } else {
+                onSignedIn((await api.signInWithGoogle(credential)).user);
+              }
             } catch (e) {
-              setError(e instanceof ApiError ? e.message : String(e));
+              const err = e instanceof ApiError ? e : null;
+              setNotice({
+                kind: err?.status === 403 && /waiting/.test(err.message) ? "info" : "error",
+                text: err ? err.message : String(e),
+                offerSignup: err?.status === 404,
+              });
             } finally {
               setBusy(false);
             }
           },
         });
-        window.google.accounts.id.renderButton(buttonRef.current, {
-          theme: "filled_black", size: "large", shape: "pill", text: "signin_with", width: 280,
-        });
       })
-      .catch((e: Error) => !cancelled && setError(e.message));
+      .catch((e: Error) => !cancelled && setNotice({ kind: "error", text: e.message }));
     return () => { cancelled = true; };
   }, [clientId, onSignedIn]);
 
+  // (Re)draw Google's button whenever the mode changes so its label matches.
+  useEffect(() => {
+    let cancelled = false;
+    loadGsi().then(() => {
+      const el = buttonRef.current;
+      if (cancelled || !el || !window.google) return;
+      el.innerHTML = "";
+      window.google.accounts.id.renderButton(el, {
+        theme: "filled_black", size: "large", shape: "pill", width: 300,
+        text: mode === "signup" ? "signup_with" : "signin_with",
+      });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [mode, requested]);
+
+  const switchMode = (m: Mode) => { setMode(m); setNotice(null); };
+
   return (
     <main className="login">
-      <section className="login-card" aria-label="Sign in">
+      <section className="login-card" aria-label={mode === "signup" ? "Create an account" : "Sign in"}>
         <div className="brand">
           <div className="brand-mark"><Mark /></div>
           <div><div className="brand-name">KGRAG</div><div className="brand-sub">Knowledge-graph RAG · local</div></div>
         </div>
-        <h1>Sign in to ask questions</h1>
-        <p>
-          Access is limited to invited Google accounts. Google confirms your email address; KGRAG never sees or
-          stores a password.
-        </p>
-        <div ref={buttonRef} className="gsi-slot" aria-busy={busy} />
-        {busy && <span className="muted">Checking your account…</span>}
-        {error && <div className="card error" role="alert">{error}</div>}
+
+        {requested ? (
+          <>
+            <h1>Thanks, {requested.name.split(" ")[0]}.</h1>
+            <p>
+              Your account for <b>{requested.email}</b> is waiting for approval. Once an admin approves it, come
+              back and sign in with the same Google account.
+            </p>
+            <button className="btn ghost" onClick={() => { setRequested(null); switchMode("signin"); }}>Back to sign in</button>
+          </>
+        ) : (
+          <>
+            <div className="tabs login-tabs" role="tablist">
+              <button role="tab" aria-selected={mode === "signin"} onClick={() => switchMode("signin")}>Sign in</button>
+              <button role="tab" aria-selected={mode === "signup"} onClick={() => switchMode("signup")}>Create account</button>
+            </div>
+            <h1>{mode === "signup" ? "Create your account" : "Sign in to ask questions"}</h1>
+            <p>
+              {mode === "signup"
+                ? "Sign up with your Google account. Google confirms your email address; an admin then approves your access."
+                : "Use the Google account you signed up with. KGRAG never sees or stores a password."}
+            </p>
+            {mode === "signup" && (
+              <label className="consent">
+                <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} />
+                <span>{consentText}</span>
+              </label>
+            )}
+            <div ref={buttonRef} className="gsi-slot" aria-busy={busy} />
+            {busy && <span className="muted">Checking your account…</span>}
+            {notice && (
+              <div className={`card ${notice.kind === "error" ? "error" : "notice"}`} role={notice.kind === "error" ? "alert" : "status"}>
+                {notice.text}
+                {notice.offerSignup && (
+                  <> <button className="linkish" onClick={() => switchMode("signup")}>Create an account</button></>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </section>
     </main>
   );
