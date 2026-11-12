@@ -116,12 +116,83 @@ def test_corpus_results_verbalize_and_draw_with_their_own_types():
                                                               "Hochschule Fulda": "INSTITUTION"}
     assert [e["tag"] for e in view["edges"]] == ["G1", "G2"] and view["layout"] == "radial"
     count = {"source": "corpus", "query_type": "count_of_type", "params": {"type": "SKILL"},
-             "rows": [{"type": "SKILL", "count": 9}]}
-    assert verbalize_graph(count) == ["This corpus has 9 skill entities."]
-    assert build_graph(count)["metrics"] == [{"label": "Skill", "value": 9, "tag": "G1"}]
+             "rows": [{"type": "SKILL", "count": 2, "names": ["Neo4j", "Python"]}]}
+    assert verbalize_graph(count) == ["This corpus has exactly 2 skill entities: Neo4j; Python."]
+    assert build_graph(count)["metrics"] == [{"label": "Skill", "value": 2, "tag": "G1"}]
 
 
 def test_legacy_path_results_are_not_treated_as_corpus_results():
     legacy = {"query_type": "path_between", "params": {"a": "A", "b": "B"},
               "rows": [{"path": ["A", "X", "B"], "relations": ["FACES_RISK", "FACES_RISK"]}]}
     assert corpus_graph.edges(legacy) is None and corpus_graph.verbalize(legacy) is None
+
+
+# ---------- entity resolution within a corpus ----------
+
+def _merged_names(nodes):
+    by = {n["id"]: n["name"] for n in nodes}
+    return sorted(sorted([by[k]] + [by[d] for d in dups]) for k, dups in corpus_graph.plan_merges(nodes))
+
+
+def test_plan_merges_on_real_cv_names():
+    n = lambda i, name, t: {"id": str(i), "name": name, "type": t}   # noqa: E731
+    nodes = [
+        n(1, "Walid", "PERSON"), n(2, "Walid Beladdad", "PERSON"), n(3, "walid Beladdad", "PERSON"), n(4, "walid", "PERSON"),
+        n(5, "Prof. Dr.-Ing. Jens Strackeljan", "PERSON"),
+        n(6, "NBA-Bewertungsvorhersage", "PROJECT"), n(7, "NBA-Bewertungsvorhersage – ML-Projekt", "PROJECT"),
+        n(8, "Knowledge-Graph RAG (GraphRAG)", "PROJECT"), n(9, "Knowledge-Graph RAG (GraphRAG) for Corporate Documents", "PROJECT"),
+        n(10, "Room Booking", "PROJECT"), n(11, "Draft Master AI", "PROJECT"),
+        n(12, "General Treasury of the Kingdom", "ORGANIZATION"), n(13, "General Treasury of the Kingdom (TGR)", "ORGANIZATION"),
+        n(14, "Hochschule Mainz", "ORGANIZATION"), n(15, "HOCHSCHULE MAINZ", "ORGANIZATION"),
+        n(16, "i3mainz, Hochschule Mainz", "ORGANIZATION"),        # a different unit: must NOT merge
+        n(17, "Hochschule Mainz", "INSTITUTION"),                 # different type: must NOT merge
+    ]
+    assert _merged_names(nodes) == [
+        ["General Treasury of the Kingdom", "General Treasury of the Kingdom (TGR)"],
+        ["HOCHSCHULE MAINZ", "Hochschule Mainz"],
+        ["Knowledge-Graph RAG (GraphRAG)", "Knowledge-Graph RAG (GraphRAG) for Corporate Documents"],
+        ["NBA-Bewertungsvorhersage", "NBA-Bewertungsvorhersage – ML-Projekt"],
+        ["Walid", "Walid Beladdad", "walid", "walid Beladdad"],
+    ]
+    keep = {nodes[int(k) - 1]["name"] for k, _ in corpus_graph.plan_merges(nodes)}
+    assert {"Walid Beladdad", "Hochschule Mainz", "NBA-Bewertungsvorhersage – ML-Projekt"} <= keep
+
+
+def test_first_name_is_not_merged_when_ambiguous():
+    nodes = [{"id": "1", "name": "Anna", "type": "PERSON"}, {"id": "2", "name": "Anna Schmidt", "type": "PERSON"},
+             {"id": "3", "name": "Anna Weber", "type": "PERSON"}]
+    assert corpus_graph.plan_merges(nodes) == []
+
+
+def test_pick_type_votes_with_the_schema():
+    schema = corpus_schema.from_preset("career")
+    # "Hochschule Mainz" was tagged PROJECT and ORGANIZATION; its links say organization
+    incident = [("in", "WORKED_ON", "PERSON"), ("in", "WORKED_AT", "PERSON"), ("in", "WORKED_AT", "PERSON")]
+    assert corpus_graph.pick_type(["PROJECT", "ORGANIZATION"], incident, schema) == "ORGANIZATION"
+
+
+def test_type_and_relation_are_read_from_the_question():
+    career = corpus_schema.from_preset("career")
+    rels = sorted({r[1] for r in career["relations"]})
+    assert corpus_graph.guess_type("how many project did walid work at ?", career["entities"]) == "PROJECT"
+    assert corpus_graph.guess_type("in which hochschule did walid study?", career["entities"]) == "INSTITUTION"
+    assert corpus_graph.guess_type("which programming skills does he have", career["entities"]) == "SKILL"
+    assert corpus_graph.guess_relation("where did he studied at", rels) == "STUDIED_AT"
+
+
+def test_linked_entities_are_stated_exactly():
+    g = {"source": "corpus", "query_type": "entities_linked_of_type", "params": {"name": "Walid Beladdad", "type": "PROJECT"},
+         "rows": [{"entity": "Walid Beladdad", "_e_type": "PERSON", "name": p, "type": "PROJECT", "relations": ["WORKED_ON"]}
+                  for p in ["Draft Master AI", "Room Booking"]]}
+    assert verbalize_graph(g) == ["Walid Beladdad is linked to exactly 2 project entities in this corpus: "
+                                  "Draft Master AI; Room Booking."]
+    view = build_graph(g)
+    assert view["layout"] == "radial" and {e["tag"] for e in view["edges"]} == {"G1"}
+
+
+def test_people_named_in_the_question_are_found_without_the_planner():
+    people = ["Walid Beladdad", "Prof. Dr.-Ing. Jens Strackeljan", "Anna Schmidt", "Anna Weber"]
+    assert corpus_graph.mentioned_people("how many project did walid work at ?", people) == ["Walid Beladdad"]
+    assert corpus_graph.mentioned_people("what did Walid Beladdad study", people) == ["Walid Beladdad"]
+    assert corpus_graph.mentioned_people("which courses did anna take", people) == []      # ambiguous
+    assert corpus_graph.mentioned_people("how many projects are there", people) == []

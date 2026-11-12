@@ -291,12 +291,14 @@ def answer(question: str, corpus: dict | None = None) -> dict:
     context = "\n\n".join(blocks)
     valid_tags = {s["tag"] for s in sources}
     system = (
-        "You answer questions about SEC 10-K filings using ONLY the sources "
-        "below. There are two kinds: GRAPH-DERIVED FACTS (structured, labeled "
-        "[G1], [G2], ...) and RETRIEVED PASSAGES (text, labeled [P1], [P2], ...). "
-        "Prefer graph-derived facts for counts and relationships and passages for "
-        "explanations. EVERY claim MUST end with a citation, and you may ONLY "
-        "cite labels that appear below — never invent a citation. If the sources "
+        "You answer questions using ONLY the sources below. There are two kinds: "
+        "GRAPH-DERIVED FACTS (structured, labeled [G1], [G2], ...) and RETRIEVED "
+        "PASSAGES (text, labeled [P1], [P2], ...). Prefer graph-derived facts for counts "
+        "and relationships and passages for explanations. When a graph-derived fact "
+        "states an exact number or a complete list, give that exact number and list "
+        "every item; never write 'at least', 'about' or 'several' for it, and don't "
+        "count from passages instead. EVERY claim MUST end with a citation, and you may "
+        "ONLY cite labels that appear below — never invent a citation. If the sources "
         "do not contain the answer, say you don't have enough information. Be concise."
     )
     messages = [{"role": "system", "content": system},

@@ -146,6 +146,8 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
     finally:
         d.close()
 
+    progress("Cleaning up entities (types, duplicates)", 0.88)
+    resolve_corpus(corpus["id"], schema)
     progress("Embedding chunks for vector search", 0.9)
     embed_chunks(corpus["id"], doc_id, title, [(c.node_id, c.text) for c in chunks])
     return {"chunks": total, "entities": entities, "relations": relations}
@@ -304,6 +306,15 @@ TEMPLATES: dict[str, dict] = {
         "entity_slots": ["name"], "value_slot": "relation",
         "desc": "one specific relation of an entity (value = a RELATION name from the list below)",
     },
+    "entities_linked_of_type": {
+        "cypher": "MATCH (e:DocEntity {corpus:$corpus, name:$name})-[r]-(o:DocEntity {corpus:$corpus}) "
+                  "WHERE $type IN labels(o) AND type(r) <> 'MENTIONS' "
+                  "RETURN e.name AS entity, [l IN labels(e) WHERE l <> 'DocEntity'][0] AS _e_type, o.name AS name, "
+                  "$type AS type, collect(DISTINCT type(r)) AS relations ORDER BY name LIMIT 100",
+        "entity_slots": ["name"], "value_slot": "type",
+        "desc": "LIST or COUNT the entities of one type linked to an entity "
+                "(how many projects did X work on; which courses did X take; where did X study)",
+    },
     "entities_of_type": {
         "cypher": "MATCH (e:DocEntity {corpus:$corpus}) WHERE $type IN labels(e) "
                   "RETURN e.name AS name, $type AS type ORDER BY name LIMIT 50",
@@ -311,7 +322,8 @@ TEMPLATES: dict[str, dict] = {
         "desc": "list all entities of one type (value = an ENTITY TYPE from the list below)",
     },
     "count_of_type": {
-        "cypher": "MATCH (e:DocEntity {corpus:$corpus}) WHERE $type IN labels(e) RETURN $type AS type, count(e) AS count",
+        "cypher": "MATCH (e:DocEntity {corpus:$corpus}) WHERE $type IN labels(e) "
+                  "WITH e ORDER BY e.name RETURN $type AS type, count(e) AS count, collect(e.name) AS names",
         "value_slot": "type",
         "desc": "how many entities of one type there are (value = an ENTITY TYPE)",
     },
@@ -324,6 +336,55 @@ TEMPLATES: dict[str, dict] = {
         "desc": "how two entities are connected (path between them)",
     },
 }
+
+
+# Words people use for schema types (English + German, since documents are often German).
+TYPE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "PROJECT": ("project", "projekt"),
+    "INSTITUTION": ("university", "universit", "hochschule", "college", "school", "schule", "institution", "studied"),
+    "ORGANIZATION": ("company", "companies", "employer", "organization", "organisation", "firm", "unternehmen", "arbeitgeber", "worked at", "work at"),
+    "ROLE": ("role", "job", "position", "stelle", "rolle"),
+    "SKILL": ("skill", "kenntnis", "fähigkeit", "technolog", "tool", "programming"),
+    "COURSE": ("course", "kurs", "modul", "module", "lecture", "vorlesung"),
+    "DEGREE": ("degree", "abschluss", "bachelor", "master"),
+    "CERTIFICATION": ("certific", "zertifik", "certificate"),
+    "LANGUAGE": ("language", "sprache"),
+    "LOCATION": ("city", "cities", "country", "countries", "location", "place", "stadt", "land", "where"),
+    "PERSON": ("person", "people", "who"),
+}
+
+
+def guess_type(question: str, allowed: list[str]) -> str | None:
+    """The schema type a question asks about, from its words. None if unclear."""
+    q = question.lower()
+    hits = []
+    for t in allowed:
+        words = (t.lower().replace("_", " "),) + TYPE_SYNONYMS.get(t, ())
+        pos = min((q.find(w) for w in words if w in q), default=-1)
+        if pos >= 0 and t != "PERSON":
+            hits.append((pos, t))
+    return min(hits)[1] if hits else None
+
+
+def guess_relation(question: str, allowed: list[str]) -> str | None:
+    q = question.lower()
+    for rel in allowed:
+        words = [w for w in rel.lower().split("_") if len(w) > 2]
+        if words and all(w in q for w in words):
+            return rel
+    return None
+
+
+def mentioned_people(question: str, people: list[str]) -> list[str]:
+    """PERSON entities the question names (full name, or a first/last name that fits only one person),
+    for when the small planner forgets to extract them."""
+    words = set(re.findall(r"[\w-]+", question.lower()))
+    q = norm_name(question)
+    full = [n for n in people if len(n) >= 3 and f" {norm_name(n)} " in f" {q} "]
+    if full:
+        return full[:1]
+    parts = [n for n in people if any(len(w) >= 3 and w in words for w in re.findall(r"[\w-]+", n.lower()))]
+    return parts if len(parts) == 1 else []
 
 
 def _resolve(session, corpus_id: str, surface: str) -> str | None:
@@ -371,6 +432,28 @@ def run_query(question: str, corpus: dict) -> dict:
         if not close:
             return {"source": "corpus", "query_type": qtype, "cypher": None, "rows": [], "error": "no template for this query type"}
         qtype = close[0]
+    # A corpus-wide count/list that names an entity really asks about that entity's links:
+    # "how many projects did Walid work on" is not "how many projects exist".
+    if qtype in ("count_of_type", "entities_of_type") and not (p.get("entities") or []):
+        try:
+            d = _driver()
+            with d.session() as s:
+                people = [r["n"] for r in s.run("MATCH (e:DocEntity:PERSON {corpus:$c}) RETURN e.name AS n", c=corpus["id"])]
+            d.close()
+            p["entities"] = mentioned_people(question, people)
+        except Exception:  # noqa: BLE001
+            pass
+    if qtype in ("count_of_type", "entities_of_type") and (p.get("entities") or []):
+        qtype = "entities_linked_of_type"
+    # "How many skills does X have" picked as a relation lookup: count the relation's object type
+    # exactly instead of letting the answer model count (duplicate) rows.
+    if qtype == "entities_by_relation" and re.match(r"\s*(how many|wie viele)\b", question, re.I):
+        rels = {r[1]: r[2] for r in corpus["schema"]["relations"]}
+        rel = str(p.get("value", "")).strip().upper().replace(" ", "_")
+        rel = rel if rel in rels else guess_relation(question, sorted(rels))
+        target = rels.get(rel) if rel else None
+        if target:
+            qtype, p["value"] = "entities_linked_of_type", target
     tmpl = TEMPLATES[qtype]
     params: dict = {"corpus": corpus["id"]}
     if "value_slot" in tmpl:
@@ -378,6 +461,11 @@ def run_query(question: str, corpus: dict) -> dict:
             sorted({r[1] for r in corpus["schema"]["relations"]})
         value = str(p.get("value", "")).strip().upper().replace(" ", "_")
         match = value if value in allowed else (difflib.get_close_matches(value, allowed, n=1, cutoff=0.6) or [None])[0]
+        if match is None:
+            # The small planner often leaves the slot empty or puts a relation in a type slot:
+            # read it from the question instead (deterministic, schema-bound).
+            match = (guess_type(question, allowed) if tmpl["value_slot"] == "type"
+                     else guess_relation(question, allowed))
         if match is None:
             return {"source": "corpus", "query_type": qtype, "cypher": None, "rows": [], "error": f"unknown {tmpl['value_slot']} {value!r}"}
         params[tmpl["value_slot"]] = match
@@ -410,11 +498,22 @@ def verbalize(g: dict) -> list[str] | None:
             rel = r["relation"].lower().replace("_", " ")
             out.append(f"{r['entity']} {rel} {r['other']}." if r["outgoing"] else f"{r['other']} {rel} {r['entity']}.")
         return out
+    if qt == "entities_linked_of_type":
+        if not rows:
+            return []
+        kind = params.get("type", "").lower().replace("_", " ")
+        names = "; ".join(r["name"] for r in rows)
+        return [f"{rows[0]['entity']} is linked to exactly {len(rows)} {kind} entit{'y' if len(rows) == 1 else 'ies'} "
+                f"in this corpus: {names}."]
     if qt == "entities_of_type":
         return [f"The {params.get('type', '').lower().replace('_', ' ')} entities in this corpus are: "
                 f"{', '.join(r['name'] for r in rows)}."] if rows else []
     if qt == "count_of_type":
-        return [f"This corpus has {rows[0]['count']} {params.get('type', '').lower().replace('_', ' ')} entities."] if rows else []
+        if not rows:
+            return []
+        kind, names = params.get("type", "").lower().replace("_", " "), rows[0].get("names") or []
+        listed = f": {'; '.join(names)}" if names else ""
+        return [f"This corpus has exactly {rows[0]['count']} {kind} entities{listed}."]
     if qt == "path_between":
         out = []
         for r in rows:
@@ -442,6 +541,175 @@ def edges(g: dict) -> list[tuple[str, str, str, int, str, str]] | None:
             p, rels = r.get("path", []), r.get("relations", [])
             out += [(p[j], rels[j], p[j + 1], i, "CONCEPT", "CONCEPT") for j in range(len(rels))]
         return out
+    if qt == "entities_linked_of_type":
+        return [(r["entity"], (r.get("relations") or ["RELATED_TO"])[0], r["name"], 0,
+                 r.get("_e_type") or "PERSON", r.get("type") or "CONCEPT") for r in rows]
     if qt in ("entities_of_type", "count_of_type"):
         return []
     return None
+
+
+# ---------------------------------------------------------------------------
+# Entity resolution within a corpus (runs after every ingest)
+# ---------------------------------------------------------------------------
+
+_SEP = re.compile(r"^\s*(?:[–—-]|\(|,|:|\bfor\b|\bfür\b|\bat\b|\bbei\b)", re.I)
+
+
+def norm_name(name: str) -> str:
+    """Comparison key: case, punctuation and spacing don't distinguish entities."""
+    s = re.sub(r"[^\w]+", " ", name.lower(), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _display_rank(name: str) -> tuple:
+    """Prefer a properly cased, longer name as the canonical one."""
+    mixed = name != name.upper() and name != name.lower()
+    return (mixed, len(name))
+
+
+def plan_merges(nodes: list[dict]) -> list[tuple[str, list[str]]]:
+    """Which nodes to merge: [(keep_id, [dup_ids])]. Pure function, unit-tested.
+
+    nodes: [{id, name, type}] for one corpus, after each node has a single type.
+    Rules (same type only):
+      1. same name up to case/punctuation/spacing;
+      2. one name + a separator + more ("NBA-Vorhersage – ML-Projekt", "General Treasury (TGR)");
+      3. PERSON: a single-word name equal to the first name of exactly one full name.
+    """
+    parent = {n["id"]: n["id"] for n in nodes}
+    by_id = {n["id"]: n for n in nodes}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    by_type: dict[str, list[dict]] = {}
+    for n in nodes:
+        by_type.setdefault(n["type"], []).append(n)
+    for typ, group in by_type.items():
+        keys: dict[str, str] = {}
+        for n in group:                                   # rule 1
+            k = norm_name(n["name"])
+            if k in keys:
+                union(keys[k], n["id"])
+            else:
+                keys[k] = n["id"]
+        for a in group:                                   # rule 2
+            na = a["name"].strip()
+            if len(norm_name(na)) < 6:
+                continue
+            for b in group:
+                nb = b["name"].strip()
+                if a is b or len(nb) <= len(na) or not nb.lower().startswith(na.lower()):
+                    continue
+                if _SEP.match(nb[len(na):]):
+                    union(a["id"], b["id"])
+        if typ == "PERSON":                               # rule 3
+            full = [n for n in group if len(n["name"].split()) >= 2]
+            for n in group:
+                if len(n["name"].split()) == 1:
+                    first = n["name"].lower()
+                    cands = {find(f["id"]) for f in full if f["name"].split()[0].lower() == first}
+                    if len(cands) == 1:
+                        union(cands.pop(), n["id"])
+
+    groups: dict[str, list[str]] = {}
+    for n in nodes:
+        groups.setdefault(find(n["id"]), []).append(n["id"])
+    out = []
+    for members in groups.values():
+        if len(members) > 1:
+            keep = max(members, key=lambda i: _display_rank(by_id[i]["name"]))
+            out.append((keep, [m for m in members if m != keep]))
+    return out
+
+
+def pick_type(candidates: list[str], incident: list[tuple[str, str, str]], schema: dict) -> str:
+    """One type for a node the extractor tagged with several. Votes come from the
+    node's relations: each (direction, RELATION, other_type) that the schema allows
+    for a candidate type supports it. Pure function, unit-tested."""
+    triples = {tuple(t) for t in schema["relations"]}
+    best, best_score = candidates[0], -1
+    for cand in candidates:
+        score = 0
+        for direction, rel, other in incident:
+            if (direction == "out" and (cand, rel, other) in triples) or \
+               (direction == "in" and (other, rel, cand) in triples):
+                score += 1
+        if score > best_score:
+            best, best_score = cand, score
+    return best
+
+
+def resolve_corpus(corpus_id: str, schema: dict) -> dict:
+    """Clean a corpus's graph: one type per entity, schema-valid relations only,
+    and duplicate entities merged (aliases kept)."""
+    types = set(schema["entities"])
+    d = _driver()
+    stats = {"retyped": 0, "invalid_relations": 0, "merged": 0}
+    try:
+        with d.session() as s:
+            # 1. one type per entity
+            multi = [dict(r) for r in s.run("""
+                MATCH (e:DocEntity {corpus: $c})
+                WITH e, [l IN labels(e) WHERE l <> 'DocEntity'] AS ts WHERE size(ts) > 1
+                OPTIONAL MATCH (e)-[r]-(o:DocEntity {corpus: $c}) WHERE type(r) <> 'MENTIONS'
+                RETURN elementId(e) AS id, ts,
+                       collect(CASE WHEN r IS NULL THEN null ELSE
+                         [CASE WHEN startNode(r) = e THEN 'out' ELSE 'in' END, type(r),
+                          [l IN labels(o) WHERE l <> 'DocEntity'][0]] END) AS incident""", c=corpus_id)]
+            for m in multi:
+                cands = [t for t in m["ts"] if t in types] or m["ts"]
+                keep = pick_type(cands, [tuple(x) for x in m["incident"] if x], schema)
+                drop = [t for t in m["ts"] if t != keep]
+                s.run("MATCH (e) WHERE elementId(e) = $id CALL apoc.create.removeLabels(e, $drop) YIELD node RETURN 1",
+                      id=m["id"], drop=drop).consume()
+                stats["retyped"] += 1
+            # 2. relations the schema doesn't allow (e.g. a person WORKED_ON a university)
+            stats["invalid_relations"] = s.run("""
+                MATCH (a:DocEntity {corpus: $c})-[r]->(b:DocEntity {corpus: $c}) WHERE type(r) <> 'MENTIONS'
+                WITH r, [l IN labels(a) WHERE l <> 'DocEntity'][0] AS ta, type(r) AS rel,
+                     [l IN labels(b) WHERE l <> 'DocEntity'][0] AS tb
+                WHERE NOT [ta, rel, tb] IN $triples
+                DELETE r RETURN count(*) AS n""", c=corpus_id, triples=[list(t) for t in schema["relations"]]).single()["n"]
+            # 3. merge duplicates
+            nodes = [dict(r) for r in s.run("""
+                MATCH (e:DocEntity {corpus: $c})
+                RETURN elementId(e) AS id, e.name AS name, [l IN labels(e) WHERE l <> 'DocEntity'][0] AS type""",
+                c=corpus_id)]
+            for keep, dups in plan_merges(nodes):
+                s.run("""
+                    MATCH (k) WHERE elementId(k) = $keep
+                    MATCH (d) WHERE elementId(d) IN $dups
+                    WITH k, collect(d) AS ds, [x IN collect(d) | x.name] + coalesce(k.aliases, []) AS aliases
+                    CALL apoc.refactor.mergeNodes([k] + ds, {properties: 'discard', mergeRels: true}) YIELD node
+                    SET node.aliases = apoc.coll.toSet(aliases)
+                    RETURN 1""", keep=keep, dups=dups).consume()
+                stats["merged"] += len(dups)
+            s.run("MATCH (e:DocEntity {corpus: $c})-[r]->(e) WHERE type(r) <> 'MENTIONS' DELETE r", c=corpus_id).consume()
+    finally:
+        d.close()
+    return stats
+
+
+if __name__ == "__main__":
+    import argparse
+    import json
+    import os
+
+    from server.corpora import CorpusStore
+    ap = argparse.ArgumentParser(description="Clean up a corpus's graph (types, invalid relations, duplicates).")
+    ap.add_argument("corpus_id")
+    a = ap.parse_args()
+    c = CorpusStore(os.getenv("DOCUMENTS_DB", str(config.DATA_DIR / "documents.db"))).get(a.corpus_id)
+    if not c:
+        raise SystemExit("No such corpus.")
+    print(json.dumps(resolve_corpus(c["id"], c["schema"])))
