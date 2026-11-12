@@ -35,7 +35,7 @@ def test_api_docs_are_off_by_default(client):
 
 
 def test_backend_errors_do_not_leak_internals(client, monkeypatch):
-    def boom(q):
+    def boom(q, corpus=None):
         raise ConnectionError("Couldn't connect to bolt://db-internal.example:7687 as neo4j/hunter2")
     monkeypatch.setattr(main, "DEMO", False)
     monkeypatch.setattr("src.answer.answer", boom)

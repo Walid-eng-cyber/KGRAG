@@ -79,10 +79,55 @@ export interface AskResponse {
   demo: boolean;
 }
 
+export interface CorpusSchema {
+  preset: string;
+  entities: string[];
+  relations: [string, string, string][];
+}
+
+export interface Corpus {
+  id: string;
+  name: string;
+  description: string;
+  kind: "documents" | "sec_insiders";
+  schema: CorpusSchema;
+  owner: string | null;
+  created_at: string;
+  documents: number;
+  ready: number;
+}
+
+export interface Preset {
+  label: string;
+  description: string;
+  preset: string;
+  entities: string[];
+  relations: [string, string, string][];
+}
+
+export interface CorpusProfile {
+  corpus: Corpus;
+  profile: {
+    types: { type: string; n: number }[];
+    top_entities: { name: string; type: string; degree: number }[];
+    relations: { relation: string; n: number }[];
+  } | null;
+  examples: Example[];
+}
+
+export interface CorpusInput {
+  name: string;
+  description: string;
+  preset?: string;
+  entities?: string[];
+  relations?: [string, string, string][];
+}
+
 export type DocumentStatus = "uploaded" | "queued" | "ingesting" | "ready" | "failed";
 
 export interface DocumentInfo {
   id: string;
+  corpus_id: string | null;
   filename: string;
   title: string;
   kind: "pdf" | "text" | "html";

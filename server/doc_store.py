@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS documents (
     ingested_at  TEXT
 );
 """
-_COLS = ("id", "filename", "title", "kind", "size_bytes", "chars", "status", "progress", "message",
+_COLS = ("id", "corpus_id", "filename", "title", "kind", "size_bytes", "chars", "status", "progress", "message",
          "chunks", "uploaded_by", "uploaded_at", "ingested_at")
 
 
@@ -53,6 +53,9 @@ class DocumentStore:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(_SCHEMA)
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(documents)")}
+            if "corpus_id" not in cols:   # databases created before corpora existed
+                self._db.execute("ALTER TABLE documents ADD COLUMN corpus_id TEXT")
             self._db.commit()
         if recover:
             self.mark_interrupted()
@@ -71,26 +74,31 @@ class DocumentStore:
         r = self._db.execute(f"SELECT {', '.join(_COLS)}, ext, content_hash FROM documents WHERE id=?", (doc_id,)).fetchone()
         return dict(r) if r else None
 
-    def list(self) -> list[dict]:
-        rows = self._db.execute(f"SELECT {', '.join(_COLS)} FROM documents ORDER BY uploaded_at DESC").fetchall()
-        return [dict(r) for r in rows]
+    def list(self, corpus_id: str | None = None, *, all_corpora: bool = False) -> list[dict]:
+        q = f"SELECT {', '.join(_COLS)} FROM documents"
+        args: tuple = ()
+        if not all_corpora:
+            q += " WHERE corpus_id IS ?"
+            args = (corpus_id,)
+        return [dict(r) for r in self._db.execute(q + " ORDER BY uploaded_at DESC", args).fetchall()]
 
-    def by_hash(self, h: str) -> dict | None:
-        r = self._db.execute("SELECT id FROM documents WHERE content_hash=?", (h,)).fetchone()
+    def by_hash(self, h: str, corpus_id: str | None = None) -> dict | None:
+        r = self._db.execute("SELECT id FROM documents WHERE content_hash=? AND corpus_id IS ?", (h, corpus_id)).fetchone()
         return self.get(r["id"]) if r else None
 
     def path(self, doc: dict) -> Path:
         return self.upload_dir / f"{doc['id']}{doc['ext']}"
 
     # ---- writes ----
-    def add(self, filename: str, title: str, kind: str, ext: str, data: bytes, uploaded_by: str | None) -> dict:
+    def add(self, filename: str, title: str, kind: str, ext: str, data: bytes, uploaded_by: str | None,
+            corpus_id: str | None = None) -> dict:
         doc_id = "DOC-" + secrets.token_hex(5)
         (self.upload_dir / f"{doc_id}{ext}").write_bytes(data)
         with self._lock:
             self._db.execute(
-                "INSERT INTO documents (id, filename, title, kind, ext, size_bytes, status, uploaded_by, uploaded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'uploaded', ?, ?)",
-                (doc_id, filename, title, kind, ext, len(data), uploaded_by, _now()))
+                "INSERT INTO documents (id, corpus_id, filename, title, kind, ext, size_bytes, status, uploaded_by, "
+                "uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'uploaded', ?, ?)",
+                (doc_id, corpus_id, filename, title, kind, ext, len(data), uploaded_by, _now()))
             self._db.commit()
         return self.get(doc_id)  # type: ignore[return-value]
 
@@ -141,7 +149,7 @@ class IngestWorker:
         self.store.update(doc_id, status="ingesting", progress=0.0, message="Reading the file")
         try:
             text = self._extract(self.store.path(doc), doc["kind"])
-            dup = self.store.by_hash(_hash(text))
+            dup = self.store.by_hash(_hash(text), doc.get("corpus_id"))
             if dup and dup["id"] != doc_id and dup["status"] == "ready":
                 raise ValueError(f"Same content as “{dup['title']}”, which is already ingested.")
             self.store.update(doc_id, chars=len(text), content_hash=_hash(text))
@@ -149,9 +157,11 @@ class IngestWorker:
             def progress(msg: str, frac: float | None = None) -> None:
                 self.store.update(doc_id, message=msg, **({"progress": round(frac, 3)} if frac is not None else {}))
 
-            result = self._ingest(doc_id, doc["title"], text, progress)
+            result = self._ingest(doc, text, progress)
+            extra = (f", {result['entities']} entities, {result['relations']} relations"
+                     if "entities" in result else "")
             self.store.update(doc_id, status="ready", progress=1.0, chunks=result.get("chunks"),
-                              message=f"Ready: {result.get('chunks', 0)} chunks in the graph and vector index",
+                              message=f"Ready: {result.get('chunks', 0)} chunks{extra}",
                               ingested_at=_now())
         except Exception as e:  # noqa: BLE001 - surface a short reason; details go to the log
             traceback.print_exc()

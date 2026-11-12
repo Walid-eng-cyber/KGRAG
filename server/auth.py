@@ -181,13 +181,6 @@ def require_admin(request: Request) -> dict:
     return user
 
 
-def require_admin_or_local(request: Request) -> dict | None:
-    """Admins when accounts are on; anyone on a local single-user setup (auth off)."""
-    if not settings.enabled:
-        return None
-    return require_admin(request)
-
-
 # ---- rate limit: sliding 60 s window per user (or per client IP when auth is off) ----
 _hits: dict[str, deque[float]] = defaultdict(deque)
 

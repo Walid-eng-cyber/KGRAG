@@ -48,6 +48,11 @@ def verbalize_graph(g: dict) -> list[str]:
     params = g.get("params", {})
     name = params.get("name") or (params.get("names") or [None])[0]
 
+    from src.corpus_graph import verbalize as verbalize_corpus
+    corpus_stmts = verbalize_corpus(g)
+    if corpus_stmts is not None:
+        return corpus_stmts
+
     def col(key: str) -> str:
         return ", ".join(str(r[key]) for r in rows if r.get(key) is not None)
 
@@ -247,8 +252,8 @@ def _corrective(valid_tags: set[str], invalid: list[str], uncited: list[str]) ->
     return " ".join(msg)
 
 
-def answer(question: str) -> dict:
-    routed = route(question)
+def answer(question: str, corpus: dict | None = None) -> dict:
+    routed = route(question, corpus)
     res = routed["result"]
     graph_result = res.get("graph", {}) if "graph" in res else {}
 

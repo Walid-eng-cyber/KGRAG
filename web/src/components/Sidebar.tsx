@@ -1,4 +1,4 @@
-import type { Health, Meta, User } from "../types";
+import type { Corpus, Health, Meta, User } from "../types";
 import { DocumentsPanel } from "./DocumentsPanel";
 
 export type Page = "ask" | "benchmark" | "admin";
@@ -28,16 +28,46 @@ interface Props {
   user: User | null;
   onSignOut: () => void;
   onToggleUpdates: (on: boolean) => void;
+  corpora: Corpus[] | null;
+  corpus: Corpus | null;
+  onSelectCorpus: (id: string) => void;
+  onNewCorpus: () => void;
+  onEditCorpus: () => void;
+  onCorpusChanged: () => void;
 }
 
-export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onToggleUpdates }: Props) {
-  const pages: Page[] = user?.role === "admin" ? ["ask", "benchmark", "admin"] : ["ask", "benchmark"];
+export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onToggleUpdates, corpora, corpus,
+  onSelectCorpus, onNewCorpus, onEditCorpus, onCorpusChanged }: Props) {
+  // The benchmark compares GraphRAG with vector RAG on SEC filings: only shown for the SEC corpus.
+  const pages: Page[] = ["ask", ...(corpus?.kind === "sec_insiders" ? ["benchmark" as Page] : []),
+    ...(user?.role === "admin" ? ["admin" as Page] : [])];
   return (
     <aside className="side">
       <div className="brand">
         <div className="brand-mark"><Mark /></div>
         <div><div className="brand-name">KGRAG</div><div className="brand-sub">Knowledge-graph RAG · local</div></div>
       </div>
+      <section className="corpus-switch" aria-label="Corpus">
+        <div className="side-label docs-head"><span>Corpus</span>
+          <button className="linkish small" onClick={onNewCorpus}>+ New</button>
+        </div>
+        {corpora && corpora.length > 0 ? (
+          <div className="corpus-select">
+            <select value={corpus?.id ?? ""} onChange={(e) => onSelectCorpus(e.target.value)} aria-label="Select corpus">
+              {corpora.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button className="corpus-gear" aria-label="Corpus settings" title="Corpus settings" onClick={onEditCorpus}>⚙</button>
+          </div>
+        ) : (
+          <p className="docs-empty">{corpora ? "No corpus yet." : "Loading…"}</p>
+        )}
+        {corpus && (
+          <p className="corpus-meta">
+            {corpus.kind === "sec_insiders" ? "SEC Forms 3/4/5 data set" : `${corpus.ready}/${corpus.documents} documents ready`}
+            {" · "}{corpus.schema.entities.length} entity types
+          </p>
+        )}
+      </section>
       <nav className="nav" aria-label="Pages">
         {pages.map((p) => (
           <button key={p} aria-current={page === p ? "page" : undefined} onClick={() => onNavigate(p)}>
@@ -45,14 +75,21 @@ export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onTog
           </button>
         ))}
       </nav>
-      <div className="corpus">
-        <div className="side-label">Corpus</div>
-        {(meta?.corpus ?? (meta?.tickers ?? ["AAPL", "MSFT", "NVDA"]).map((t) => ({ label: t, detail: "10-K" }))).map((c) => (
-          <div className="side-row" key={c.label}><span className="ticker">{c.label}</span><span className="muted">{c.detail}</span></div>
-        ))}
-      </div>
-      {meta && (!meta.auth.enabled || user) && (
-        <DocumentsPanel canManage={!meta.auth.enabled || user?.role === "admin"} />
+      {meta?.demo && (
+        <div className="corpus">
+          <div className="side-label">Corpus</div>
+          {meta.tickers.map((t) => (
+            <div className="side-row" key={t}><span className="ticker">{t}</span><span className="muted">10-K</span></div>
+          ))}
+        </div>
+      )}
+      {corpus?.kind === "documents" && <DocumentsPanel key={corpus.id} corpusId={corpus.id} onChanged={onCorpusChanged} />}
+      {corpus?.kind === "sec_insiders" && (
+        <div className="corpus">
+          <div className="side-label">Data set</div>
+          <div className="side-row"><span className="ticker">SEC Form 4</span><span className="muted">insider trades</span></div>
+          <p className="docs-empty">Loaded with <span className="mono">python -m src.form4</span>. Read-only in the app.</p>
+        </div>
       )}
       <div className="spacer" />
       <div className="status" aria-label="Local stack status">

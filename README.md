@@ -215,6 +215,33 @@ python -m src.benchmark          # fast demo subset
 python -m src.benchmark --all    # full stratified set
 ```
 
+## Corpora: private document collections with their own schema
+Everything in the web UI happens inside a **corpus**: a private collection that
+only its creator can see. Each corpus has its own profile and its own
+extraction schema, and is isolated end to end:
+
+- **Graph:** entities are stored per corpus (`(:DocEntity {corpus, name})`),
+  so the same name in two corpora is two different nodes; every graph query
+  filters on the corpus.
+- **Vectors:** chunks are embedded with a `corpus_id`, and search only looks
+  inside the selected corpus.
+- **Schema:** pick a preset when creating a corpus (*Company filings*,
+  *CV & career*, *General*) or define your own entity types and
+  `SUBJECT · RELATION · OBJECT` shapes. The extractor is constrained to it.
+- **UI:** the sidebar's corpus switcher changes the documents list, the intro,
+  the entity-type legend (with counts) and the example questions, which are
+  generated from what was actually extracted. The Benchmark page only appears
+  for the SEC corpus.
+
+Create corpora and upload files in the UI. Admin commands:
+
+```bash
+python -m server.corpus_admin list
+python -m server.corpus_admin create-sec --owner you@gmail.com          # attach the loaded SEC data
+python -m server.corpus_admin adopt-documents --owner you@gmail.com \
+    --name "My documents" --preset general                               # files uploaded before corpora
+```
+
 ## Insider trading data (SEC Forms 3/4/5)
 KGRAG can also load the SEC's quarterly
 [Insider Transactions Data Sets](https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets):

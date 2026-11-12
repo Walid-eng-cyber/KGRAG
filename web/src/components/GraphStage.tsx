@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { shapeFor, TYPE_LABEL } from "../lib/geometry";
+import { shapeFor, typeLabel } from "../lib/geometry";
 import { citedSets, layoutGraph, STAGE, type PlacedEdge } from "../lib/layout";
 import type { GraphView } from "../types";
 import { Glyph, MatchShape, Shape } from "./Shape";
@@ -131,7 +131,7 @@ export function GraphStage({ graph, cited, selectedTag }: Props) {
           } as CSSProperties;
           return (
             <g key={n.id} className={`node${anchor ? " anchor" : ""}${cited ? " cited" : ""}`} style={vars}>
-              <title>{`${n.label} · ${TYPE_LABEL[n.type] ?? n.type}`}</title>
+              <title>{`${n.label} · ${typeLabel(n.type)}`}</title>
               <g transform={`translate(${n.x.toFixed(1)} ${n.y.toFixed(1)})`}>
                 <g className="node-body">
                   <g className="beat">
@@ -159,7 +159,7 @@ export function GraphStage({ graph, cited, selectedTag }: Props) {
       <div className="stage-foot">
         <div className="legend">
           {types.map((t) => (
-            <span key={t}><Glyph type={t} size={16} />{TYPE_LABEL[t] ?? t}</span>
+            <span key={t}><Glyph type={t} size={16} />{typeLabel(t)}</span>
           ))}
           {layout.hidden > 0 && <span>+{layout.hidden} more not drawn</span>}
         </div>

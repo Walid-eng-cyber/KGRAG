@@ -276,7 +276,7 @@ def _batched(rows: list[dict], n: int = 2000):
         yield rows[i:i + n]
 
 
-def load(path: Path, include_amendments: bool = False) -> dict[str, int]:
+def load(path: Path, include_amendments: bool = False, corpus_id: str | None = None) -> dict[str, int]:
     import config
     from neo4j import GraphDatabase
 
@@ -296,6 +296,8 @@ def load(path: Path, include_amendments: bool = False) -> dict[str, int]:
             for query, rows in steps:
                 for batch in _batched(rows):
                     s.run(query, rows=batch).consume()
+            if corpus_id:
+                s.run("MATCH (n:SecEntity) WHERE n.corpus IS NULL OR n.corpus <> $c SET n.corpus = $c", c=corpus_id).consume()
     finally:
         driver.close()
     return {k: len(v) for k, v in recs.items()}
@@ -305,6 +307,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Load an SEC Form 3/4/5 quarterly data set into Neo4j.")
     ap.add_argument("path", type=Path, help="unzipped quarter folder or the downloaded .zip")
     ap.add_argument("--include-amendments", action="store_true", help="also load 3/A, 4/A, 5/A filings")
+    ap.add_argument("--corpus", help="corpus id to attach the data to (see python -m server.corpus_admin)")
     args = ap.parse_args()
-    counts = load(args.path, args.include_amendments)
+    counts = load(args.path, args.include_amendments, args.corpus)
     print("Loaded: " + ", ".join(f"{v:,} {k}" for k, v in counts.items()))

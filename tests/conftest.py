@@ -1,6 +1,15 @@
+import os
+import tempfile
+
 import pytest
 
-from server import auth
+# Point the API's stores at a throwaway database BEFORE server.main is imported,
+# so tests never read or modify the real data/documents.db.
+_TMP = tempfile.mkdtemp(prefix="kgrag-tests-")
+os.environ["DOCUMENTS_DB"] = os.path.join(_TMP, "documents.db")
+os.environ["UPLOAD_DIR"] = os.path.join(_TMP, "uploads")
+
+from server import auth  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

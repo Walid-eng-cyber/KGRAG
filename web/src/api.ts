@@ -1,4 +1,7 @@
-import type { Account, AccountStatus, AskResponse, Benchmark, DocumentInfo, Health, Meta, User } from "./types";
+import type {
+  Account, AccountStatus, AskResponse, Benchmark, Corpus, CorpusInput, CorpusProfile, DocumentInfo, Health, Meta,
+  Preset, User,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -53,14 +56,17 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ opt_in }),
     }),
-  documents: () => request<{ documents: DocumentInfo[]; max_upload_mb: number; accepted: string[] }>("/api/documents"),
-  uploadDocument: (file: File, title = "") => {
+  documents: (corpusId: string) =>
+    request<{ documents: DocumentInfo[]; max_upload_mb: number; accepted: string[] }>(
+      `/api/corpora/${encodeURIComponent(corpusId)}/documents`),
+  uploadDocument: (corpusId: string, file: File, title = "") => {
     const body = new FormData();
     body.append("file", file);
     body.append("title", title);
-    return request<{ document: DocumentInfo }>("/api/documents", { method: "POST", body });
+    return request<{ document: DocumentInfo }>(`/api/corpora/${encodeURIComponent(corpusId)}/documents`, { method: "POST", body });
   },
-  ingestDocuments: () => request<{ queued: string[] }>("/api/documents/ingest", { method: "POST" }),
+  ingestDocuments: (corpusId: string) =>
+    request<{ queued: string[] }>(`/api/corpora/${encodeURIComponent(corpusId)}/ingest`, { method: "POST" }),
   deleteDocument: (id: string) => request<{ ok: boolean }>(`/api/documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   adminUsers: (status?: AccountStatus) =>
     request<{ users: Account[] }>(`/api/admin/users${status ? `?status=${status}` : ""}`),
@@ -72,11 +78,22 @@ export const api = {
     }),
   health: () => request<Health>("/api/health"),
   benchmark: () => request<Benchmark>("/api/benchmark"),
-  ask: (question: string, signal?: AbortSignal) =>
+  ask: (question: string, corpusId: string | null, signal?: AbortSignal) =>
     request<AskResponse>("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, corpus_id: corpusId }),
       signal,
     }),
+  corpora: () => request<{ corpora: Corpus[]; presets: Record<string, Preset> }>("/api/corpora"),
+  createCorpus: (body: CorpusInput) =>
+    request<{ corpus: Corpus }>("/api/corpora", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+  updateCorpus: (id: string, body: Partial<CorpusInput>) =>
+    request<{ corpus: Corpus }>(`/api/corpora/${encodeURIComponent(id)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+  deleteCorpus: (id: string) => request<{ ok: boolean }>(`/api/corpora/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  corpusProfile: (id: string) => request<CorpusProfile>(`/api/corpora/${encodeURIComponent(id)}/profile`),
 };

@@ -57,6 +57,11 @@ def build_graph(graph_result: dict | None) -> dict:
         metrics = [{"label": r.get("company"), "value": r.get("count", 0), "tag": f"G{i + 1}"}
                    for i, r in enumerate(rows)]
 
+    from src.corpus_graph import edges as corpus_edges
+    typed = corpus_edges(g)            # document corpora carry their own entity types
+    if typed is not None:
+        return _build_typed(g, typed, metrics)
+
     edges_in = graph_edges(g)
     if qt == "path_between":
         # Paths are undirected: a hop may arrive as (Export controls)-[FACES_RISK]-(Microsoft).
@@ -93,3 +98,25 @@ def build_graph(graph_result: dict | None) -> dict:
     return {"query_type": qt, "cypher": g.get("cypher"), "layout": layout,
             "nodes": list(nodes.values()), "edges": edges, "metrics": metrics,
             "error": g.get("error")}
+
+
+def _build_typed(g: dict, typed: list[tuple], metrics: list[dict]) -> dict:
+    """Graph view for a document corpus: node types come from the stored entity labels."""
+    qt, rows = g.get("query_type"), g.get("rows") or []
+    if qt in ("entities_of_type", "count_of_type") and rows:
+        if qt == "count_of_type":
+            metrics = [{"label": rows[0]["type"].replace("_", " ").title(), "value": rows[0]["count"], "tag": "G1"}]
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    for i, (src, rel, dst, row, s_type, o_type) in enumerate(typed):
+        for name, typ, role in ((src, s_type, "anchor"), (dst, o_type, "target")):
+            nid = _node_id(name)
+            node = nodes.setdefault(nid, {"id": nid, "label": name, "type": typ, "role": role})
+            if role == "anchor":
+                node["role"] = "anchor"
+        edges.append({"id": f"e{i}", "source": _node_id(src), "target": _node_id(dst),
+                      "relation": rel, "tag": f"G{row + 1}"})
+    anchors = [n for n in nodes.values() if n["role"] == "anchor"]
+    layout = "none" if not edges else "path" if qt == "path_between" else "radial" if len(anchors) <= 1 else "bipartite"
+    return {"query_type": qt, "cypher": g.get("cypher"), "layout": layout, "nodes": list(nodes.values()),
+            "edges": edges, "metrics": metrics, "error": g.get("error")}

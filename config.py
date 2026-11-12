@@ -63,3 +63,4 @@ PRICE_PER_1M_OUTPUT = float(os.getenv("PRICE_PER_1M_OUTPUT", "0.0"))
 BUDGET_LIMIT_USD = float(os.getenv("BUDGET_LIMIT_USD", "10.0"))
 # Measured wall-clock per chunk on this machine (for the local time estimate).
 SECONDS_PER_CHUNK = float(os.getenv("SECONDS_PER_CHUNK", "20.0"))
+EXTRACTION_TIMEOUT_S = int(os.getenv("EXTRACTION_TIMEOUT_S", "240"))  # per model call while extracting

@@ -1,16 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { CorpusDialog } from "./components/CorpusDialog";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { AskPage } from "./pages/AskPage";
 import { AdminPage } from "./pages/AdminPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { LoginPage } from "./pages/LoginPage";
-import type { Health, Meta, User } from "./types";
+import type { Corpus, CorpusProfile, Health, Meta, Preset, User } from "./types";
 
 const pageFromHash = (): Page =>
   window.location.hash === "#/benchmark" ? "benchmark" : window.location.hash === "#/admin" ? "admin" : "ask";
 
 type Session = "loading" | "signed-out" | "ready";
+const CORPUS_KEY = "kgrag.corpus";
+
+function remembered(): string | null {
+  try { return localStorage.getItem(CORPUS_KEY); } catch { return null; }
+}
+function remember(id: string): void {
+  try { localStorage.setItem(CORPUS_KEY, id); } catch { /* private mode: fine */ }
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>(pageFromHash);
@@ -18,6 +27,11 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session>("loading");
+  const [corpora, setCorpora] = useState<Corpus[] | null>(null);
+  const [presets, setPresets] = useState<Record<string, Preset>>({});
+  const [corpusId, setCorpusId] = useState<string | null>(remembered);
+  const [profile, setProfile] = useState<CorpusProfile | null>(null);
+  const [dialog, setDialog] = useState<"new" | "edit" | null>(null);
 
   // Decide whether sign-in is needed before showing anything protected.
   useEffect(() => {
@@ -47,6 +61,34 @@ export default function App() {
     if (session === "ready") api.health().then(setHealth).catch(() => setHealth(null));
   }, [session]);
 
+  const loadCorpora = useCallback(async () => {
+    if (meta?.demo) return setCorpora([]);
+    try {
+      const r = await api.corpora();
+      setCorpora(r.corpora);
+      setPresets(r.presets);
+      setCorpusId((cur) => (cur && r.corpora.some((c) => c.id === cur) ? cur : r.corpora[0]?.id ?? null));
+    } catch {
+      setCorpora([]);
+    }
+  }, [meta?.demo]);
+  useEffect(() => { if (session === "ready" && meta) void loadCorpora(); }, [session, meta, loadCorpora]);
+
+  const corpus = useMemo(() => corpora?.find((c) => c.id === corpusId) ?? null, [corpora, corpusId]);
+  const loadProfile = useCallback(() => {
+    if (!corpus) return setProfile(null);
+    api.corpusProfile(corpus.id).then(setProfile).catch(() => setProfile(null));
+  }, [corpus]);
+  useEffect(() => { setProfile(null); loadProfile(); }, [loadProfile]);
+
+  // The SEC-only benchmark page makes no sense for a document corpus.
+  useEffect(() => {
+    if (page === "benchmark" && corpus && corpus.kind !== "sec_insiders") navigate("ask");
+  }, [page, corpus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectCorpus = (id: string) => { setCorpusId(id); remember(id); };
+  const corpusChanged = useCallback(() => { void loadCorpora(); loadProfile(); }, [loadCorpora, loadProfile]);
+
   const onSignedIn = useCallback((u: User) => { setUser(u); setSession("ready"); }, []);
   const signOut = async () => {
     await api.signOut().catch(() => undefined);
@@ -72,11 +114,13 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Sidebar page={page} onNavigate={navigate} meta={meta} health={health} user={user} onSignOut={signOut} onToggleUpdates={toggleUpdates} />
+      <Sidebar page={page} onNavigate={navigate} meta={meta} health={health} user={user} onSignOut={signOut}
+        onToggleUpdates={toggleUpdates} corpora={corpora} corpus={corpus} onSelectCorpus={selectCorpus}
+        onNewCorpus={() => setDialog("new")} onEditCorpus={() => corpus && setDialog("edit")} onCorpusChanged={corpusChanged} />
       <main className="main">
         <div className="topline">
           <div className="crumb">
-            {page === "ask" ? <>Ask <b>/ grounded answer</b></>
+            {page === "ask" ? <>{corpus ? corpus.name : "Ask"} <b>/ grounded answer</b></>
               : page === "admin" ? <>Accounts <b>/ sign-ups and access</b></>
               : <>Benchmark <b>/ GraphRAG vs plain vector RAG</b></>}
           </div>
@@ -84,8 +128,18 @@ export default function App() {
             : <span className="pill local">All models on-device · $0 per query</span>}
         </div>
         {page === "admin" && user?.role === "admin" ? <AdminPage me={user} />
-          : page === "benchmark" ? <BenchmarkPage /> : <AskPage meta={meta} />}
+          : page === "benchmark" ? <BenchmarkPage />
+          : <AskPage key={corpus?.id ?? "none"} meta={meta} corpus={corpus} profile={profile} onNewCorpus={() => setDialog("new")} />}
       </main>
+      {dialog && (
+        <CorpusDialog
+          presets={presets}
+          editing={dialog === "edit" ? corpus : null}
+          onClose={() => setDialog(null)}
+          onSaved={(c) => { setDialog(null); selectCorpus(c.id); void loadCorpora().then(loadProfile); }}
+          onDeleted={() => { setDialog(null); setCorpusId(null); void loadCorpora(); }}
+        />
+      )}
     </div>
   );
 }

@@ -148,20 +148,24 @@ def build() -> None:
     driver.close()
 
 
-def retrieve(query: str, k: int = 5) -> list[dict]:
-    """Vector top-k as structured rows (the vector retrieval path)."""
+def retrieve(query: str, k: int = 5, corpus_id: str | None = None) -> list[dict]:
+    """Vector top-k as structured rows (the vector retrieval path).
+    With a corpus, only that corpus's chunks are searched; without one, only
+    chunks that belong to no corpus (the legacy 10-K index)."""
     conn = pg_connect()
     qv = _vec(embed_one(query))
     with conn.cursor() as cur:
+        cur.execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS corpus_id text")
         cur.execute(
             """
             SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
                    1 - (embedding <=> %s::vector) AS similarity
             FROM chunk_embeddings
+            WHERE corpus_id IS NOT DISTINCT FROM %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s;
             """,
-            (qv, qv, k),
+            (qv, corpus_id, qv, k),
         )
         cols = ["chunk_id", "doc_id", "section_path", "filing_date",
                 "text", "entity_ids", "similarity"]

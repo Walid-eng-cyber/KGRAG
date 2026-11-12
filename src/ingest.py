@@ -43,8 +43,11 @@ def build_llm() -> Ollama:
         model=config.OLLAMA_MODEL,
         base_url=config.OLLAMA_BASE_URL,
         # Local models are slower than a hosted API — give each call room.
-        request_timeout=900.0,
+        request_timeout=float(config.EXTRACTION_TIMEOUT_S),
         context_window=4096,
+        # A runaway structured-output generation once blocked a job for 15 minutes:
+        # cap tokens per extraction call so one bad chunk fails fast instead.
+        additional_kwargs={"num_predict": 1024},
     )
 
 

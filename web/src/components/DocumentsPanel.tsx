@@ -8,7 +8,8 @@ const PENDING = new Set(["uploaded", "failed"]);
 const size = (b: number) => (b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
 
 /** Sidebar section: the documents KGRAG answers from, with upload and ingest. */
-export function DocumentsPanel({ canManage }: { canManage: boolean }) {
+export function DocumentsPanel({ corpusId, onChanged }: { corpusId: string; onChanged?: () => void }) {
+  const canManage = true; // corpora are private: the owner manages their own documents
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null);
   const [limits, setLimits] = useState({ maxMb: 20, accepted: [".pdf", ".txt", ".md", ".html"] });
   const [error, setError] = useState<string | null>(null);
@@ -17,18 +18,23 @@ export function DocumentsPanel({ canManage }: { canManage: boolean }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.documents();
+      const r = await api.documents(corpusId);
       setDocs(r.documents);
       setLimits({ maxMb: r.max_upload_mb, accepted: r.accepted });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }, []);
+  }, [corpusId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setDocs(null); setError(null); void load(); }, [load]);
 
   // Poll while something is queued or ingesting.
   const busy = !!docs?.some((d) => ACTIVE.has(d.status));
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !busy) onChanged?.();
+    wasBusy.current = busy;
+  }, [busy, onChanged]);
   useEffect(() => {
     if (!busy) return;
     const id = setInterval(() => void load(), 2500);
@@ -45,7 +51,7 @@ export function DocumentsPanel({ canManage }: { canManage: boolean }) {
         continue;
       }
       try {
-        await api.uploadDocument(f);
+        await api.uploadDocument(corpusId, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof ApiError ? e.message : String(e)}`);
       } finally {
@@ -59,11 +65,12 @@ export function DocumentsPanel({ canManage }: { canManage: boolean }) {
   const ingest = async () => {
     setError(null);
     try {
-      await api.ingestDocuments();
+      await api.ingestDocuments(corpusId);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
     void load();
+    onChanged?.();
   };
 
   const remove = async (d: DocumentInfo) => {
@@ -86,7 +93,7 @@ export function DocumentsPanel({ canManage }: { canManage: boolean }) {
       </div>
 
       {docs && docs.length === 0 && (
-        <p className="docs-empty">{canManage ? "Add PDFs or text files for KGRAG to answer from." : "No documents yet."}</p>
+        <p className="docs-empty">Add PDFs or text files to this corpus, then press Ingest.</p>
       )}
 
       <ul className="docs-list">

@@ -127,18 +127,21 @@ def classify(question: str) -> tuple[Path, float]:
 
 # --- 2. The retrieval paths --------------------------------------------------
 
-def vector_path(question: str, k: int = 5) -> list[dict]:
+def vector_path(question: str, k: int = 5, corpus: dict | None = None) -> list[dict]:
     try:
-        return vector_retrieve(question, k)
+        return vector_retrieve(question, k, corpus["id"] if corpus else None)
     except Exception as e:  # noqa: BLE001 - e.g. no vector index built for this corpus
         print(f"[router] vector path unavailable: {type(e).__name__}", file=sys.stderr)
         return []
 
 
-def graph_path(question: str) -> dict:
+def graph_path(question: str, corpus: dict | None = None) -> dict:
     # Safe path: entity resolution + parameterized template. The model never
-    # emits Cypher (see src/graph_query.py).
-    return run_graph_query(question)
+    # emits Cypher (see src/graph_query.py and src/corpus_graph.py).
+    if corpus and corpus.get("kind") == "documents":
+        from src.corpus_graph import run_query
+        return run_query(question, corpus)
+    return run_graph_query(question, corpus)
 
 
 # --- 3. The router -----------------------------------------------------------
@@ -165,24 +168,24 @@ def _outcome(result: dict) -> dict:
     return o
 
 
-def route(question: str) -> dict:
+def route(question: str, corpus: dict | None = None) -> dict:
     t0 = perf_counter()
     path, conf = classify(question)
     low = conf < config.ROUTER_CONFIDENCE_THRESHOLD
 
     if path == Path.HYBRID or low:
         chosen = "HYBRID (both + merge)" + (" [low-confidence fallback]" if low else "")
-        result = {"vector": vector_path(question), "graph": graph_path(question)}
+        result = {"vector": vector_path(question, corpus=corpus), "graph": graph_path(question, corpus)}
     elif path == Path.GRAPH:
-        chosen, result = "GRAPH", {"graph": graph_path(question)}
+        chosen, result = "GRAPH", {"graph": graph_path(question, corpus)}
         if not result["graph"].get("rows"):
             # Nothing structured matched (no template fit, or the facts were never
             # extracted as triples): fall back to the text before giving up.
-            vec = vector_path(question)
+            vec = vector_path(question, corpus=corpus)
             if vec:
                 chosen, result = "VECTOR (graph found nothing)", {**result, "vector": vec}
     else:
-        chosen, result = "VECTOR", {"vector": vector_path(question)}
+        chosen, result = "VECTOR", {"vector": vector_path(question, corpus=corpus)}
 
     latency_ms = round((perf_counter() - t0) * 1000, 1)
 

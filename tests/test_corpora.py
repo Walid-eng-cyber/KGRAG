@@ -1,0 +1,127 @@
+"""Corpus schemas, profiles and the corpus-scoped graph helpers (no database needed)."""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+import server.main as main
+from server.corpora import CorpusStore
+from server.graph_view import build_graph
+from src import corpus_graph, corpus_schema
+from src.answer import verbalize_graph
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "corpus_store", CorpusStore(tmp_path / "documents.db"))
+    return TestClient(main.app)
+
+
+def test_presets_are_valid_schemas():
+    for key in corpus_schema.PRESETS:
+        s = corpus_schema.from_preset(key)
+        assert s["preset"] == key and s["entities"] and s["relations"]
+        assert all(r[0] in s["entities"] and r[2] in s["entities"] for r in s["relations"])
+
+
+def test_custom_schema_is_normalized_and_checked():
+    s = corpus_schema.validate(["person", "Skill set", "skill set"], [["person", "has skill", "skill set"]])
+    assert s == {"entities": ["PERSON", "SKILL_SET"], "relations": [["PERSON", "HAS_SKILL", "SKILL_SET"]]}
+    with pytest.raises(corpus_schema.SchemaError, match="isn't in the entity list"):
+        corpus_schema.validate(["PERSON"], [["PERSON", "WORKS_AT", "COMPANY"]])
+    with pytest.raises(corpus_schema.SchemaError, match="at least one relation"):
+        corpus_schema.validate(["PERSON"], [])
+    with pytest.raises(corpus_schema.SchemaError, match="valid relation"):
+        corpus_schema.validate(["A"], [["A", "MENTIONS", "A"]])   # reserved for chunk links
+    with pytest.raises(corpus_schema.SchemaError, match="valid type"):
+        corpus_schema.validate(["9LIVES"], [["9LIVES", "X", "9LIVES"]])
+
+
+def test_create_corpus_with_preset_or_custom_schema(client):
+    r = client.post("/api/corpora", json={"name": "Walid", "description": "My CV", "preset": "career"})
+    c = r.json()["corpus"]
+    assert c["kind"] == "documents" and c["schema"]["preset"] == "career" and "SKILL" in c["schema"]["entities"]
+    custom = client.post("/api/corpora", json={"name": "Recipes", "entities": ["dish", "ingredient"],
+                                               "relations": [["dish", "uses", "ingredient"]]}).json()["corpus"]
+    assert custom["schema"] == {"preset": "custom", "entities": ["DISH", "INGREDIENT"],
+                                "relations": [["DISH", "USES", "INGREDIENT"]]}
+    bad = client.post("/api/corpora", json={"name": "Bad", "entities": ["A"], "relations": [["A", "R", "B"]]})
+    assert bad.status_code == 422 and "entity list" in bad.json()["detail"]
+    presets = client.get("/api/corpora").json()["presets"]
+    assert set(presets) == {"company", "career", "general"}
+
+
+def test_update_corpus_schema_and_name(client):
+    cid = client.post("/api/corpora", json={"name": "X", "preset": "general"}).json()["corpus"]["id"]
+    r = client.patch(f"/api/corpora/{cid}", json={"name": "Y", "entities": ["PERSON", "PET"],
+                                                   "relations": [["PERSON", "OWNS", "PET"]]})
+    c = r.json()["corpus"]
+    assert c["name"] == "Y" and c["schema"]["entities"] == ["PERSON", "PET"] and c["schema"]["preset"] == "custom"
+
+
+def test_sec_corpus_profile_uses_insider_examples(client, monkeypatch):
+    c = main.corpus_store.create("SEC", "", "sec_insiders", {"preset": "sec_insiders", "entities": ["COMPANY"],
+                                                             "relations": [["COMPANY", "X", "COMPANY"]]}, None)
+    p = client.get(f"/api/corpora/{c['id']}/profile").json()
+    assert p["examples"] and "insider" in p["examples"][0]["question"].lower()
+    assert client.post(f"/api/corpora/{c['id']}/documents", files={"file": ("a.txt", b"x" * 300)}).status_code == 400
+
+
+def test_document_corpus_profile_suggests_from_extracted_entities(client, monkeypatch):
+    cid = client.post("/api/corpora", json={"name": "W", "preset": "career"}).json()["corpus"]["id"]
+    monkeypatch.setattr(corpus_graph, "profile", lambda c: {
+        "types": [{"type": "SKILL", "n": 9}, {"type": "INSTITUTION", "n": 2}],
+        "top_entities": [{"name": "Walid Beladdad", "type": "PERSON", "degree": 12},
+                         {"name": "Hochschule Fulda", "type": "INSTITUTION", "degree": 3}],
+        "relations": [{"relation": "HAS_SKILL", "n": 9}]})
+    qs = [e["question"] for e in client.get(f"/api/corpora/{cid}/profile").json()["examples"]]
+    assert "What is Walid Beladdad connected to?" in qs
+    assert "How is Walid Beladdad related to Hochschule Fulda?" in qs
+    assert "Which skill entries are in these documents?" in qs
+
+
+class _Ent:
+    def __init__(self, name, label):
+        self.name, self.label = name, label
+
+
+class _Rel:
+    def __init__(self, s, label, t):
+        self.source_id, self.label, self.target_id = s, label, t
+
+
+class _Node:
+    def __init__(self, ents, rels):
+        self.metadata = {"nodes": ents, "relations": rels}
+
+
+def test_triples_from_keeps_only_safe_well_formed_triples():
+    ents, rels = corpus_graph.triples_from(_Node(
+        [_Ent("Walid", "PERSON"), _Ent("Python", "SKILL"), _Ent("x", "bad label; DROP")],
+        [_Rel("Walid", "HAS_SKILL", "Python"), _Rel("Walid", "HAS_SKILL", "Unknown"),
+         _Rel("Walid", "REL`) DETACH DELETE n //", "Python")]))
+    assert ents == [{"name": "Walid", "label": "PERSON"}, {"name": "Python", "label": "SKILL"}]
+    assert rels == [{"source": "Walid", "target": "Python", "type": "HAS_SKILL"}]
+
+
+def test_corpus_results_verbalize_and_draw_with_their_own_types():
+    g = {"source": "corpus", "query_type": "entity_connections", "params": {"name": "Walid"}, "cypher": "M",
+         "rows": [{"entity": "Walid", "_e_type": "PERSON", "relation": "HAS_SKILL", "outgoing": True,
+                   "other": "Python", "_o_type": "SKILL", "_src": "c1"},
+                  {"entity": "Walid", "_e_type": "PERSON", "relation": "STUDIED_AT", "outgoing": True,
+                   "other": "Hochschule Fulda", "_o_type": "INSTITUTION", "_src": "c2"}]}
+    assert verbalize_graph(g) == ["Walid has skill Python.", "Walid studied at Hochschule Fulda."]
+    view = build_graph(g)
+    assert {n["label"]: n["type"] for n in view["nodes"]} == {"Walid": "PERSON", "Python": "SKILL",
+                                                              "Hochschule Fulda": "INSTITUTION"}
+    assert [e["tag"] for e in view["edges"]] == ["G1", "G2"] and view["layout"] == "radial"
+    count = {"source": "corpus", "query_type": "count_of_type", "params": {"type": "SKILL"},
+             "rows": [{"type": "SKILL", "count": 9}]}
+    assert verbalize_graph(count) == ["This corpus has 9 skill entities."]
+    assert build_graph(count)["metrics"] == [{"label": "Skill", "value": 9, "tag": "G1"}]
+
+
+def test_legacy_path_results_are_not_treated_as_corpus_results():
+    legacy = {"query_type": "path_between", "params": {"a": "A", "b": "B"},
+              "rows": [{"path": ["A", "X", "B"], "relations": ["FACES_RISK", "FACES_RISK"]}]}
+    assert corpus_graph.edges(legacy) is None and corpus_graph.verbalize(legacy) is None

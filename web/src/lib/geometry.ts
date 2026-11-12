@@ -66,4 +66,19 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   STOCK_EXCHANGE: "Stock exchange",
 };
 
-export const shapeFor = (t: string): ShapeSpec => SHAPES[(t as EntityType)] ?? SHAPES.COMPANY;
+// Custom schemas bring types without a dedicated glyph: a ringed circle in a colour
+// derived from the type name, so each type is consistent across the UI.
+const PALETTE = ["#7FD1C4", "#A99CFF", "#F0B86E", "#E58F7B", "#9FB4FF", "#C9C6BD", "#B5D98A", "#E8A3C8"];
+const ALIASES: Record<string, EntityType> = { ORGANIZATION: "COMPANY", INSTITUTION: "AUDITOR", RISK_FACTOR: "RISK" };
+
+export function shapeFor(t: string): ShapeSpec {
+  const known = SHAPES[(t as EntityType)] ?? SHAPES[ALIASES[t]];
+  if (known) return known;
+  let h = 0;
+  for (const ch of t) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const color = PALETTE[h % PALETTE.length];
+  return { kind: "circle", r: 16, name: "circle", entryRotation: 0, style: { fill: "#1d1e24", stroke: color, strokeWidth: 3 } };
+}
+
+export const typeLabel = (t: string): string =>
+  TYPE_LABEL[(t as EntityType)] ?? t.toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());

@@ -146,9 +146,20 @@ TEMPLATES: dict[str, dict] = {
 }
 
 
-def _templates_doc() -> str:
+INSIDER_TEMPLATES = ("insiders_of", "insider_trades_at", "insider_net_activity", "trades_by_insider",
+                     "companies_sharing_insiders", "largest_insider_trades")
+
+
+def _templates_for(corpus: dict | None) -> dict[str, dict]:
+    """The SEC insider corpus only offers insider templates; the legacy 10-K graph offers all."""
+    if corpus and corpus.get("kind") == "sec_insiders":
+        return {k: TEMPLATES[k] for k in INSIDER_TEMPLATES}
+    return TEMPLATES
+
+
+def _templates_doc(templates: dict[str, dict] | None = None) -> str:
     lines = []
-    for key, t in TEMPLATES.items():
+    for key, t in (templates or TEMPLATES).items():
         if "entity_slots" in t:
             need = f"entities: {t['entity_slots']}"
         elif "list_slot" in t:
@@ -162,7 +173,8 @@ def _templates_doc() -> str:
 # --- Entity resolution: surface name -> real node name ----------------------
 
 _RESOLVE = """
-MATCH (n) WHERE NOT n:Chunk AND n.name IS NOT NULL
+MATCH (n) WHERE NOT n:Chunk AND NOT n:DocEntity AND n.name IS NOT NULL
+  AND ($corpus IS NULL OR (n:SecEntity AND n.corpus = $corpus))
 WITH n, toLower(n.name) AS nm, toLower($q) AS q
 WITH n, nm, q,
    CASE WHEN nm = q THEN 4
@@ -179,20 +191,20 @@ LIMIT 1
 """
 
 
-def resolve_entity(driver, surface: str) -> str | None:
+def resolve_entity(driver, surface: str, corpus_id: str | None = None) -> str | None:
     with driver.session() as s:
-        rec = s.run(_RESOLVE, q=surface).single()
+        rec = s.run(_RESOLVE, q=surface, corpus=corpus_id).single()
     return rec["name"] if rec else None
 
 
 # --- Planning: model picks a template + names, NEVER Cypher -----------------
 
-def plan(question: str) -> dict:
+def plan(question: str, templates: dict[str, dict] | None = None) -> dict:
     system = (
         "Convert the question into a graph-query PLAN. Pick exactly one "
         "query_type from the list and extract the entity name(s) and/or value "
         "it needs. NEVER write Cypher.\n"
-        f"Query types:\n{_templates_doc()}\n"
+        f"Query types:\n{_templates_doc(templates)}\n"
         'Reply ONLY JSON: {"query_type":"...","entities":["..."],"value":"..."}.'
     )
     client = ollama.Client(host=config.OLLAMA_BASE_URL)
@@ -215,18 +227,20 @@ def _display(cypher: str, params: dict) -> str:
     return out
 
 
-def run_graph_query(question: str) -> dict:
+def run_graph_query(question: str, corpus: dict | None = None) -> dict:
+    templates = _templates_for(corpus)
+    corpus_id = corpus["id"] if corpus else None
     try:
-        p = plan(question)
+        p = plan(question, templates)
         qtype = str(p.get("query_type", "")).strip()
     except Exception as e:
         return {"query_type": None, "cypher": None, "rows": [],
                 "error": f"plan failed: {str(e)[:80]}"}
 
-    if qtype not in TEMPLATES:
+    if qtype not in templates:
         # Tolerate model typos by snapping to the nearest KNOWN key. This never
         # widens the attack surface — the result is still a fixed template.
-        close = difflib.get_close_matches(qtype, TEMPLATES.keys(), n=1, cutoff=0.7)
+        close = difflib.get_close_matches(qtype, templates.keys(), n=1, cutoff=0.7)
         if not close:
             return {"query_type": qtype, "cypher": None, "rows": [],
                     "error": "no template for this query type"}
@@ -238,7 +252,7 @@ def run_graph_query(question: str) -> dict:
         config.NEO4J_URI, auth=(config.NEO4J_USERNAME, config.NEO4J_PASSWORD),
         notifications_min_severity="OFF")
     try:
-        resolved = [r for r in (resolve_entity(driver, s) for s in surfaces) if r]
+        resolved = [r for r in (resolve_entity(driver, s, corpus_id) for s in surfaces) if r]
         params: dict = {}
 
         if "entity_slots" in tmpl:

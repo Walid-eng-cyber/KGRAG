@@ -90,7 +90,7 @@ def test_benchmark_from_results_file(tmp_path):
 # ---------- endpoints ----------
 
 def test_ask_shapes_a_real_answer(client, monkeypatch):
-    def fake_answer(q):
+    def fake_answer(q, corpus=None):
         return {"question": q, "classified": "HYBRID", "confidence": 0.5, "path_used": "HYBRID (low confidence)",
                 "answer": "Apple faces export controls [G1] and relies on partners in Asia [P1].",
                 "sources": [{"tag": "G1", "kind": "graph-derived fact", "text": "Apple faces export controls."},
@@ -112,7 +112,7 @@ def test_ask_shapes_a_real_answer(client, monkeypatch):
 
 
 def test_ask_backend_failure_is_a_503(client, monkeypatch):
-    def boom(q):
+    def boom(q, corpus=None):
         raise ConnectionError("neo4j down")
     monkeypatch.setattr(main, "DEMO", False)
     monkeypatch.setattr("src.answer.answer", boom)
@@ -138,6 +138,9 @@ def test_demo_mode(client, monkeypatch, q, layout):
     assert set(body["cited"]) <= tags  # every demo citation resolves to a source
 
 
-def test_meta_and_benchmark_endpoints(client):
-    assert len(client.get("/api/meta").json()["examples"]) >= 4
+def test_meta_and_benchmark_endpoints(client, monkeypatch):
+    monkeypatch.setattr(main, "DEMO", True)
+    assert len(client.get("/api/meta").json()["examples"]) >= 4      # demo samples
+    monkeypatch.setattr(main, "DEMO", False)
+    assert client.get("/api/meta").json()["examples"] == []          # live: examples come per corpus
     assert client.get("/api/benchmark").json()["overall"]["n"] > 0
