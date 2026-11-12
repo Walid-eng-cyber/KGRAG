@@ -29,3 +29,7 @@ python-dotenv>=1.0.0
 # HTTP API for the React UI (server/, web/)
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+
+# Sign in with Google (server/auth.py)
+google-auth>=2.30.0
+itsdangerous>=2.2.0

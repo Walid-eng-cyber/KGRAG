@@ -156,6 +156,28 @@ and `cd web && npm run dev` (http://localhost:5173, proxies `/api`).
 No databases or models yet? `KGRAG_DEMO=1 uvicorn server.main:app --port 8000`
 serves clearly labelled sample answers.
 
+#### Sign-in (optional, for anything not on localhost)
+With `GOOGLE_CLIENT_ID` unset the web UI is open, which is fine on your own
+machine. To require sign-in:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+   create an **OAuth client ID** of type *Web application* and add your site's
+   URL (e.g. `https://kgrag.example.com`, or `http://localhost:8000` for
+   testing) under **Authorized JavaScript origins**.
+2. Set these in `.env`:
+   ```bash
+   GOOGLE_CLIENT_ID=<the client id>
+   ALLOWED_EMAILS=you@gmail.com,colleague@gmail.com
+   SESSION_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(48))">
+   COOKIE_SECURE=1        # 0 only when testing over plain http://localhost
+   ```
+3. Restart the API. Visitors now get a **Sign in with Google** screen.
+
+Only Google accounts on `ALLOWED_EMAILS` whose email Google has verified get
+in. The server verifies Google's signed ID token, then sets an HttpOnly
+session cookie (12 h by default); no passwords are stored. `/api/ask` is also
+rate-limited per user (`RATE_LIMIT_PER_MIN`, default 10).
+
 ### Phase 5 — benchmark
 ```bash
 python -m src.benchmark          # fast demo subset

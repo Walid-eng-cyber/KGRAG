@@ -1,4 +1,4 @@
-import type { Health, Meta } from "../types";
+import type { Health, Meta, User } from "../types";
 
 export type Page = "ask" | "benchmark";
 
@@ -22,9 +22,11 @@ interface Props {
   onNavigate: (p: Page) => void;
   meta: Meta | null;
   health: Health | null;
+  user: User | null;
+  onSignOut: () => void;
 }
 
-export function Sidebar({ page, onNavigate, meta, health }: Props) {
+export function Sidebar({ page, onNavigate, meta, health, user, onSignOut }: Props) {
   return (
     <aside className="side">
       <div className="brand">
@@ -64,6 +66,15 @@ export function Sidebar({ page, onNavigate, meta, health }: Props) {
           </>
         )}
       </div>
+      {user && (
+        <div className="account">
+          <div className="account-who" title={user.email}>
+            <span className="account-name">{user.name}</span>
+            <span className="model">{user.email}</span>
+          </div>
+          <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+        </div>
+      )}
     </aside>
   );
 }

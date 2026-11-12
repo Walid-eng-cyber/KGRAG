@@ -14,14 +14,14 @@ import os
 from pathlib import Path
 from time import perf_counter
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import config
-from server import demo
+import config  # noqa: F401 - loads .env before auth settings are read
+from server import auth, demo
 from server.benchmark_view import benchmark_summary
 from server.graph_view import build_graph, cited_tags
 from server.health import health
@@ -40,6 +40,10 @@ app.add_middleware(
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
+
+
+class GoogleLogin(BaseModel):
+    credential: str = Field(min_length=20, max_length=4096)
 
 
 def _path_key(path_used: str | None) -> str:
@@ -87,11 +91,30 @@ def shape_answer(raw: dict, latency_s: float, is_demo: bool = False) -> dict:
 @app.get("/api/meta")
 def meta() -> dict:
     return {"demo": DEMO, "examples": demo.EXAMPLES, "tickers": ["AAPL", "MSFT", "NVDA"],
+            "auth": {"enabled": auth.settings.enabled, "client_id": auth.settings.client_id or None},
             "models": {"router": config.ROUTER_MODEL, "answer": config.ANSWER_MODEL,
                        "embed": config.EMBED_MODEL}}
 
 
-@app.get("/api/health")
+@app.post("/api/auth/google")
+def auth_google(body: GoogleLogin, response: Response) -> dict:
+    user = auth.login(body.credential)
+    auth.start_session(response, user)
+    return {"user": user}
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict | None = Depends(auth.require_user)) -> dict:
+    return {"user": user}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response) -> dict:
+    auth.end_session(response)
+    return {"ok": True}
+
+
+@app.get("/api/health", dependencies=[Depends(auth.require_user)])
 def get_health() -> dict:
     if DEMO:
         down = {"ok": False, "detail": "demo mode"}
@@ -101,7 +124,7 @@ def get_health() -> dict:
     return {**health(), "demo": False}
 
 
-@app.post("/api/ask")
+@app.post("/api/ask", dependencies=[Depends(auth.require_user), Depends(auth.rate_limit)])
 def ask(req: AskRequest) -> dict:
     t0 = perf_counter()
     if DEMO:
@@ -116,7 +139,7 @@ def ask(req: AskRequest) -> dict:
     return shape_answer(raw, perf_counter() - t0)
 
 
-@app.get("/api/benchmark")
+@app.get("/api/benchmark", dependencies=[Depends(auth.require_user)])
 def get_benchmark() -> dict:
     return benchmark_summary()
 

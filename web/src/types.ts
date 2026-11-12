@@ -85,8 +85,15 @@ export interface Example {
   question: string;
 }
 
+export interface User {
+  email: string;
+  name: string;
+  picture?: string | null;
+}
+
 export interface Meta {
   demo: boolean;
+  auth: { enabled: boolean; client_id: string | null };
   examples: Example[];
   tickers: string[];
   models: { router: string; answer: string; embed: string };
