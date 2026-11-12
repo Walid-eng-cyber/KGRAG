@@ -78,3 +78,20 @@ jobs:
         run: npm test
       - name: Build
         run: npx vite build
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python dependencies (pip-audit)
+        run: pipx run pip-audit -r requirements.txt
+      - name: npm dependencies (high and critical)
+        working-directory: web
+        run: npm audit --audit-level=high

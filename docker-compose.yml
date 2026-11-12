@@ -1,16 +1,18 @@
 # Local Neo4j for the knowledge graph.
 #   Start:  docker compose up -d
-#   Browser UI: http://localhost:7474  (user: neo4j / pass: kgrag-password)
+#   Browser UI: http://localhost:7474  (user: neo4j / password: NEO4J_PASSWORD from .env)
 #   Bolt (used by the app): bolt://localhost:7687
+# Passwords come from .env (Compose reads it automatically) and ports listen on
+# 127.0.0.1 only, so the databases are never reachable from other machines.
 services:
   neo4j:
     image: neo4j:5.24
     container_name: kgrag-neo4j
     ports:
-      - "7474:7474"   # HTTP browser
-      - "7687:7687"   # Bolt driver
+      - "127.0.0.1:7474:7474"   # HTTP browser
+      - "127.0.0.1:7687:7687"   # Bolt driver
     environment:
-      - NEO4J_AUTH=neo4j/kgrag-password
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
       - NEO4J_PLUGINS=["apoc"]          # APOC procedures (used by LlamaIndex)
       - NEO4J_apoc_export_file_enabled=true
       - NEO4J_apoc_import_file_enabled=true
@@ -24,10 +26,10 @@ services:
     image: pgvector/pgvector:pg16
     container_name: kgrag-postgres
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=kgrag-password
+      - POSTGRES_PASSWORD=${PG_PASSWORD:?Set PG_PASSWORD in .env}
       - POSTGRES_DB=kgrag
     volumes:
       - pg_data:/var/lib/postgresql/data

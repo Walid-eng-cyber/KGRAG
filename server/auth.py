@@ -45,6 +45,12 @@ class Settings:
         self.ttl_s = int(float(env.get("SESSION_TTL_HOURS", "12")) * 3600)
         # Secure cookies need HTTPS; set COOKIE_SECURE=0 only for plain-http local testing.
         self.cookie_secure = env.get("COOKIE_SECURE", "1").lower() not in _FALSE
+        # "lax" when the UI and API share a site; "none" when the UI is on another domain (e.g. Netlify).
+        self.cookie_samesite = env.get("COOKIE_SAMESITE", "lax").strip().lower()
+        if self.cookie_samesite not in {"lax", "strict", "none"}:
+            raise RuntimeError("COOKIE_SAMESITE must be lax, strict or none.")
+        if self.cookie_samesite == "none" and not self.cookie_secure:
+            raise RuntimeError("COOKIE_SAMESITE=none requires COOKIE_SECURE=1 (HTTPS); browsers drop it otherwise.")
         self.rate_per_min = int(env.get("RATE_LIMIT_PER_MIN", "10"))
         self.users_db = env.get("USERS_DB", str(_DEFAULT_DB))
         self.enabled = bool(self.client_id)
@@ -132,11 +138,12 @@ def login(credential: str) -> dict:
 
 def start_session(response: Response, user: dict) -> None:
     response.set_cookie(COOKIE, _serializer().dumps({"email": user["email"]}), max_age=settings.ttl_s,
-                        httponly=True, secure=settings.cookie_secure, samesite="lax", path="/")
+                        httponly=True, secure=settings.cookie_secure, samesite=settings.cookie_samesite, path="/")
 
 
 def end_session(response: Response) -> None:
-    response.delete_cookie(COOKIE, path="/", httponly=True, secure=settings.cookie_secure, samesite="lax")
+    response.delete_cookie(COOKIE, path="/", httponly=True, secure=settings.cookie_secure,
+                           samesite=settings.cookie_samesite)
 
 
 def current_user(request: Request) -> dict | None:

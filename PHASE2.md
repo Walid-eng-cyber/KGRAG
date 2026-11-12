@@ -86,7 +86,7 @@ pip install -r requirements.txt   # adds psycopg2-binary, pgvector
 
 Connection (defaults, override in `.env`):
 ```
-host=localhost  port=5434  db=kgrag  user=postgres  password=kgrag-password
+host=localhost  port=5434  db=kgrag  user=postgres  password=<PG_PASSWORD from .env>
 ```
 
 ---
