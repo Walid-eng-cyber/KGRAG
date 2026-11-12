@@ -141,6 +141,21 @@ similarity bars / hybrid tabs):
 streamlit run app.py     # http://localhost:8501
 ```
 
+### The web UI (React + FastAPI)
+A React app (`web/`) on top of a Python API (`server/`): routing trace,
+answers with clickable `[G#]`/`[P#]` citations, an animated evidence graph
+where every entity type has its own shape, retrieved passages, and the
+benchmark.
+```bash
+pip install -r requirements.txt
+cd web && npm install && npm run build && cd ..
+uvicorn server.main:app --port 8000          # UI + API on http://localhost:8000
+```
+Development with hot reload: run `uvicorn server.main:app --reload --port 8000`
+and `cd web && npm run dev` (http://localhost:5173, proxies `/api`).
+No databases or models yet? `KGRAG_DEMO=1 uvicorn server.main:app --port 8000`
+serves clearly labelled sample answers.
+
 ### Phase 5 — benchmark
 ```bash
 python -m src.benchmark          # fast demo subset

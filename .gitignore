@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# web UI
+node_modules/
+web/dist/
+.pytest_cache/
