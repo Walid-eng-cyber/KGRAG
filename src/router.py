@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from enum import Enum
 from time import perf_counter
 from typing import get_args
@@ -45,7 +46,9 @@ SYSTEM = (
     "  - connection questions ('how is X connected to Y')\n"
     "  - multi-hop chains ('which risks do X's suppliers face')\n"
     "  - comparisons across entities ('compare X and Y')\n"
-    "  - aggregations over relationships ('how many', 'which companies', 'count').\n"
+    "  - aggregations over relationships ('how many', 'which companies', 'count')\n"
+    "  - insider trading: who bought/sold shares, a company's insiders, directors, officers,\n"
+    "    largest insider sales/purchases, companies sharing a director (SEC Form 4 data).\n"
     "Choose VECTOR for:\n"
     "  - definitions ('what is X')\n"
     "  - policy lookups ('what is X's policy on Y')\n"
@@ -61,6 +64,11 @@ FEWSHOT = [
     ("Which risks do Apple's suppliers face?", '{"path":"GRAPH","confidence":0.9}'),
     ("Compare the number of subsidiaries of Apple and Microsoft.", '{"path":"GRAPH","confidence":0.92}'),
     ("How many companies are regulated by the SEC?", '{"path":"GRAPH","confidence":0.95}'),
+    ("Which NVIDIA insiders sold shares recently?", '{"path":"GRAPH","confidence":0.93}'),
+    ("Were insiders net buyers or sellers of Tesla?", '{"path":"GRAPH","confidence":0.92}'),
+    ("Which companies share a director with Apple?", '{"path":"GRAPH","confidence":0.92}'),
+    ("Who are Microsoft's insiders?", '{"path":"GRAPH","confidence":0.9}'),
+    ("What were the largest insider purchases this quarter?", '{"path":"GRAPH","confidence":0.92}'),
     # VECTOR — definition, policy, single fact
     ("What is a reportable business segment?", '{"path":"VECTOR","confidence":0.9}'),
     ("What is Apple's policy on data privacy?", '{"path":"VECTOR","confidence":0.88}'),
@@ -72,7 +80,9 @@ _GRAPH = re.compile(
     r"\b(how many|number of|count|total|most|fewest|list all|which companies|who are"
     r"|regulated by|connected to|related to|linked to|relationship between|path from"
     r"|compare|versus|vs\.?|difference between|more .* than"
-    r"|suppliers? of|competitors? of|subsidiaries? of|executives? of)\b"
+    r"|suppliers? of|competitors? of|subsidiaries? of|executives? of"
+    r"|insiders?|insider trad\w*|bought|sold|sell|sells|selling|buy|buys|buying|sales? of shares|purchases?"
+    r"|directors?|officers?|board member|net (buyers?|sellers?))\b"
     r"|\b\w+'s (suppliers?|competitors?|subsidiaries?|executives?)\b", re.I)
 # VECTOR: definitions, policy lookups, single-fact questions.
 _VECTOR = re.compile(
@@ -118,7 +128,11 @@ def classify(question: str) -> tuple[Path, float]:
 # --- 2. The retrieval paths --------------------------------------------------
 
 def vector_path(question: str, k: int = 5) -> list[dict]:
-    return vector_retrieve(question, k)
+    try:
+        return vector_retrieve(question, k)
+    except Exception as e:  # noqa: BLE001 - e.g. no vector index built for this corpus
+        print(f"[router] vector path unavailable: {type(e).__name__}", file=sys.stderr)
+        return []
 
 
 def graph_path(question: str) -> dict:

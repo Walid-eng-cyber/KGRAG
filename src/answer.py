@@ -78,13 +78,69 @@ def verbalize_graph(g: dict) -> list[str]:
                     for i in range(len(rels))]
             out.append("; ".join(hops) + ".")
         return out
+    insider = _verbalize_insider(qt, rows, name)
+    if insider is not None:
+        return insider
     return [f"{qt}: {rows}"]  # generic fallback
 
 
+def _money(v) -> str:
+    return f"${v:,.0f}" if isinstance(v, (int, float)) else "an unreported value"
+
+
+def _shares(v) -> str:
+    return f"{v:,.0f}" if isinstance(v, (int, float)) else "an unreported number of"
+
+
+def _trade(r: dict, who: str, where: str) -> str:
+    price = f" at ${r['price']:,.2f}" if r.get("price") else ""
+    value = f" (about {_money(r['value'])})" if r.get("value") else ""
+    plan = " under a 10b5-1 trading plan" if r.get("plan_10b5_1") else ""
+    src = f" [SEC filing {r['_src']}]" if r.get("_src") else ""
+    kind = r.get("type") or "transaction"
+    article = "an" if kind[:1].lower() in "aeiou" else "a"
+    return (f"On {r.get('date') or 'an unreported date'}, {who} reported {article} {kind} of "
+            f"{_shares(r.get('shares'))} shares of {where}{price}{value}{plan}.{src}")
+
+
+def _verbalize_insider(qt: str, rows: list[dict], name: str | None) -> list[str] | None:
+    """Statements for the SEC Form 3/4/5 templates; None for other query types."""
+    if qt == "insiders_of":
+        people = []
+        for r in rows:
+            role = r.get("title") or "/".join(r.get("roles") or []) or "insider"
+            people.append(f"{r['insider']} ({role})")
+        return [f"{name}'s reported insiders include: {', '.join(people)}."]
+    if qt == "insider_trades_at":
+        return [_trade(r, r["insider"], name) for r in rows]
+    if qt == "trades_by_insider":
+        return [_trade(r, name, r["company"]) for r in rows]
+    if qt == "largest_insider_trades":
+        return [_trade(r, r["insider"], r["company"]) for r in rows]
+    if qt == "companies_sharing_insiders":
+        return [f"{r['company']} shares these insiders with {name}: {', '.join(r['shared_insiders'])}."
+                for r in rows]
+    if qt == "insider_net_activity":
+        r = rows[0]
+        if not (r.get("shares_bought") or r.get("shares_sold")):
+            return [f"No open-market insider purchases or sales of {name} are recorded in the loaded filings."]
+        net = (r.get("value_bought") or 0) - (r.get("value_sold") or 0)
+        span = (f"on {r['first_date']}" if r["first_date"] == r["last_date"]
+                else f"between {r['first_date']} and {r['last_date']}")
+        bought = (f"{r['buyers']} insider(s) bought {_shares(r['shares_bought'])} shares of {name} on the open "
+                  f"market ({_money(r['value_bought'])}) {span}." if r.get("shares_bought")
+                  else f"No insider bought {name} shares on the open market {span}.")
+        sold = (f"{r['sellers']} insider(s) sold {_shares(r['shares_sold'])} shares of {name} "
+                f"({_money(r['value_sold'])}) {span}." if r.get("shares_sold")
+                else f"No insider sold {name} shares on the open market {span}.")
+        return [bought, sold + f" Net, insiders were {'buyers' if net > 0 else 'sellers'} of about {_money(abs(net))}."]
+    return None
+
+
 # query_type -> (relation label, center is the $name entity) for graph viz.
-def graph_triples(g: dict) -> list[tuple[str, str, str]]:
-    """Structured (source, relation, target) triples for visualizing a graph
-    answer (distinct from verbalize_graph, which makes prose)."""
+def graph_edges(g: dict) -> list[tuple[str, str, str, int]]:
+    """(source, relation, target, row_index) for visualizing a graph answer.
+    row_index ties each edge to the verbalized statement it came from."""
     if not g or g.get("error") or not g.get("rows"):
         return []
     qt, rows, params = g.get("query_type"), g["rows"], g.get("params", {})
@@ -96,18 +152,38 @@ def graph_triples(g: dict) -> list[tuple[str, str, str]]:
               "regulators_of": ("REGULATED_BY", "regulator")}
     if qt in simple:
         rel, col = simple[qt]
-        return [(name, rel, str(r[col])) for r in rows if r.get(col)]
+        return [(name, rel, str(r[col]), i) for i, r in enumerate(rows) if r.get(col)]
     if qt == "companies_facing_risk":
-        return [(str(r["company"]), "FACES_RISK", params.get("risk", "risk")) for r in rows]
+        return [(str(r["company"]), "FACES_RISK", params.get("risk", "risk"), i) for i, r in enumerate(rows)]
     if qt == "neighbors":
-        return [(name, str(r["relation"]), str(r["connected_to"])) for r in rows]
+        return [(name, str(r["relation"]), str(r["connected_to"]), i) for i, r in enumerate(rows)]
     if qt == "path_between":
         out = []
-        for r in rows:
+        for i, r in enumerate(rows):
             path, rels = r.get("path", []), r.get("relations", [])
-            out += [(str(path[i]), str(rels[i]), str(path[i + 1])) for i in range(len(rels))]
+            out += [(str(path[j]), str(rels[j]), str(path[j + 1]), i) for j in range(len(rels))]
+        return out
+    if qt == "insiders_of":
+        return [(str(r["insider"]), "INSIDER_OF", name, i) for i, r in enumerate(rows)]
+    if qt == "insider_trades_at":
+        return [(str(r["insider"]), "TRADED", name, i) for i, r in enumerate(rows)]
+    if qt == "trades_by_insider":
+        return [(name, "TRADED", str(r["company"]), i) for i, r in enumerate(rows)]
+    if qt == "largest_insider_trades":
+        return [(str(r["insider"]), "TRADED", str(r["company"]), i) for i, r in enumerate(rows)]
+    if qt == "companies_sharing_insiders":
+        out = []
+        for i, r in enumerate(rows):
+            for person in r.get("shared_insiders") or []:
+                out += [(str(person), "INSIDER_OF", name, i), (str(person), "INSIDER_OF", str(r["company"]), i)]
         return out
     return []
+
+
+def graph_triples(g: dict) -> list[tuple[str, str, str]]:
+    """Structured (source, relation, target) triples for visualizing a graph
+    answer (distinct from verbalize_graph, which makes prose)."""
+    return [(s, r, t) for s, r, t, _ in graph_edges(g)]
 
 
 def format_passages(vs: list[dict], limit: int = 4) -> list[tuple[str, str]]:

@@ -107,6 +107,7 @@ export interface Meta {
   auth: { enabled: boolean; client_id: string | null; consent_text: string };
   examples: Example[];
   tickers: string[];
+  corpus?: { label: string; detail: string }[];
   models: { router: string; answer: string; embed: string };
 }
 

@@ -215,6 +215,34 @@ python -m src.benchmark          # fast demo subset
 python -m src.benchmark --all    # full stratified set
 ```
 
+## Insider trading data (SEC Forms 3/4/5)
+KGRAG can also load the SEC's quarterly
+[Insider Transactions Data Sets](https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets):
+every Form 3/4/5 filing as structured tables, so it goes straight into the
+graph with no LLM extraction.
+
+```bash
+# download one quarter (the SEC requires a name + email in the User-Agent; uses SEC_USER_AGENT)
+curl -A "$SEC_USER_AGENT" -o data/raw/form345/2026q3_form345.zip \
+  https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/2026q3_form345.zip
+python -m src.form4 data/raw/form345/2026q3_form345.zip     # idempotent; re-run any time
+```
+
+It adds `(:PERSON|COMPANY)-[:INSIDER_OF {roles, title}]->(:COMPANY)` and one
+`-[:TRADED {date, code, shares, price, value, plan_10b5_1, accession}]->` per
+transaction. Every answer cites the SEC accession number of the filing. New
+graph templates: a company's insiders, its recent insider trades, net
+open-market buying vs selling, a person's trades, companies that share an
+insider (board interlocks, 2 hops), and the largest insider buys/sells.
+
+Data caveats: the SEC publishes filings as filed. Amendments (4/A) are skipped
+by default (`--include-amendments` to keep them); a joint filing is counted once
+(the other filers are kept as `co_filers`); obvious typos (a price far from
+the company's usual price, or a trade over $10B) are flagged `price_suspect`
+and left out of rankings and totals. A filer that enters totals in the price
+field consistently can't be detected this way, and related owners who each
+file the same trade appear twice.
+
 ## Evaluation harnesses
 - `python -m src.eval_retrieval` — retrieval recall@k + HNSW `ef_search` sweep.
 - `python -m src.eval_router` — routing accuracy on a labeled question set + confusion matrix.

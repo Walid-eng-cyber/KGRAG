@@ -46,8 +46,8 @@ export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onTog
       </nav>
       <div className="corpus">
         <div className="side-label">Corpus</div>
-        {(meta?.tickers ?? ["AAPL", "MSFT", "NVDA"]).map((t) => (
-          <div className="side-row" key={t}><span className="ticker">{t}</span><span className="muted">10-K</span></div>
+        {(meta?.corpus ?? (meta?.tickers ?? ["AAPL", "MSFT", "NVDA"]).map((t) => ({ label: t, detail: "10-K" }))).map((c) => (
+          <div className="side-row" key={c.label}><span className="ticker">{c.label}</span><span className="muted">{c.detail}</span></div>
         ))}
       </div>
       <div className="spacer" />

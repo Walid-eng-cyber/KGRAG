@@ -88,6 +88,61 @@ TEMPLATES: dict[str, dict] = {
         "value_slot": "risk",
         "desc": "which/how many companies face a given risk (value = risk keyword)",
     },
+    # --- SEC Form 3/4/5 insider data (loaded by src/form4.py) ---------------
+    "insiders_of": {
+        "cypher": "MATCH (i)-[r:INSIDER_OF]->(c:COMPANY {name:$name}) "
+                  "RETURN CASE WHEN i:COMPANY THEN 'COMPANY' ELSE 'PERSON' END AS _insider_type, i.name AS insider, r.roles AS roles, r.title AS title, r.last_filed AS last_filed "
+                  "ORDER BY 'Officer' IN r.roles DESC, i.name LIMIT 50",
+        "entity_slots": ["name"],
+        "desc": "who the insiders (directors, officers, 10% owners) of a company are",
+    },
+    "insider_trades_at": {
+        "cypher": "MATCH (i)-[t:TRADED]->(c:COMPANY {name:$name}) "
+                  "RETURN CASE WHEN i:COMPANY THEN 'COMPANY' ELSE 'PERSON' END AS _insider_type, i.name AS insider, t.date AS date, t.code_label AS type, t.shares AS shares, "
+                  "t.price AS price, t.value AS value, t.plan_10b5_1 AS plan_10b5_1, t.accession AS _src "
+                  "ORDER BY t.date DESC, t.value DESC LIMIT 25",
+        "entity_slots": ["name"],
+        "desc": "recent insider transactions (buys, sells, awards) at a company",
+    },
+    "insider_net_activity": {
+        "cypher": "MATCH (i)-[t:TRADED]->(c:COMPANY {name:$name}) WHERE t.code IN ['P','S'] AND NOT coalesce(t.price_suspect, false) "
+                  "RETURN sum(CASE WHEN t.code='P' THEN t.shares ELSE 0 END) AS shares_bought, "
+                  "sum(CASE WHEN t.code='P' THEN coalesce(t.value,0) ELSE 0 END) AS value_bought, "
+                  "sum(CASE WHEN t.code='S' THEN t.shares ELSE 0 END) AS shares_sold, "
+                  "sum(CASE WHEN t.code='S' THEN coalesce(t.value,0) ELSE 0 END) AS value_sold, "
+                  "count(DISTINCT CASE WHEN t.code='P' THEN i END) AS buyers, "
+                  "count(DISTINCT CASE WHEN t.code='S' THEN i END) AS sellers, "
+                  "min(t.date) AS first_date, max(t.date) AS last_date",
+        "entity_slots": ["name"],
+        "desc": "whether insiders were net buyers or sellers of a company (open-market totals)",
+    },
+    "trades_by_insider": {
+        "cypher": "MATCH (i {name:$name})-[t:TRADED]->(c:COMPANY) "
+                  "RETURN CASE WHEN i:COMPANY THEN 'COMPANY' ELSE 'PERSON' END AS _insider_type, c.name AS company, t.date AS date, t.code_label AS type, t.shares AS shares, "
+                  "t.price AS price, t.value AS value, t.accession AS _src "
+                  "ORDER BY t.date DESC LIMIT 25",
+        "entity_slots": ["name"],
+        "desc": "what a specific person or fund bought or sold, at which companies",
+    },
+    "companies_sharing_insiders": {
+        "cypher": "MATCH (c:COMPANY {name:$name})<-[:INSIDER_OF]-(i)-[:INSIDER_OF]->(o:COMPANY) "
+                  "WHERE o <> c "
+                  "RETURN o.name AS company, collect(DISTINCT i.name)[..5] AS shared_insiders "
+                  "ORDER BY size(shared_insiders) DESC, company LIMIT 25",
+        "entity_slots": ["name"],
+        "desc": "which other companies share a director/officer/owner with a company (board interlocks)",
+    },
+    "largest_insider_trades": {
+        "cypher": "MATCH (i)-[t:TRADED]->(c:COMPANY) "
+                  "WHERE t.code = CASE WHEN toLower($direction) STARTS WITH 'b' "
+                  "OR toLower($direction) STARTS WITH 'p' THEN 'P' ELSE 'S' END AND t.value IS NOT NULL "
+                  "AND NOT coalesce(t.price_suspect, false) "
+                  "RETURN CASE WHEN i:COMPANY THEN 'COMPANY' ELSE 'PERSON' END AS _insider_type, i.name AS insider, c.name AS company, t.date AS date, t.code_label AS type, "
+                  "t.shares AS shares, t.price AS price, t.value AS value, t.accession AS _src "
+                  "ORDER BY t.value DESC LIMIT 15",
+        "value_slot": "direction",
+        "desc": "the largest insider purchases or sales across all companies (value = buy or sell)",
+    },
 }
 
 
@@ -108,16 +163,18 @@ def _templates_doc() -> str:
 
 _RESOLVE = """
 MATCH (n) WHERE NOT n:Chunk AND n.name IS NOT NULL
-WITH n, [l IN labels(n) WHERE NOT l STARTS WITH '__'][0] AS label
-WHERE toLower(n.name) = toLower($q)
-   OR any(a IN coalesce(n.aliases, []) WHERE toLower(a) = toLower($q))
-   OR toLower(n.name) CONTAINS toLower($q)
-   OR toLower($q) CONTAINS toLower(n.name)
-RETURN n.name AS name, label,
-   CASE WHEN toLower(n.name) = toLower($q) THEN 3
-        WHEN any(a IN coalesce(n.aliases, []) WHERE toLower(a) = toLower($q)) THEN 2
-        ELSE 1 END AS score
-ORDER BY score DESC, size(n.name) ASC
+WITH n, toLower(n.name) AS nm, toLower($q) AS q
+WITH n, nm, q,
+   CASE WHEN nm = q THEN 4
+        WHEN any(a IN coalesce(n.aliases, []) WHERE toLower(a) = q) THEN 3
+        WHEN nm CONTAINS q AND size(q) >= 3 THEN 2
+        WHEN q CONTAINS nm AND size(nm) >= 5 THEN 1
+        ELSE 0 END AS score
+WHERE score > 0
+RETURN n.name AS name, [l IN labels(n) WHERE NOT l STARTS WITH '__'][0] AS label, score
+// exact matches first; for "contains" prefer the shortest name (Nvidia -> NVIDIA CORP),
+// for "question contains name" prefer the longest name (the most specific match)
+ORDER BY score DESC, CASE WHEN score = 1 THEN -size(n.name) ELSE size(n.name) END ASC
 LIMIT 1
 """
 
@@ -178,7 +235,8 @@ def run_graph_query(question: str) -> dict:
     tmpl = TEMPLATES[qtype]
     surfaces = p.get("entities") or []
     driver = GraphDatabase.driver(
-        config.NEO4J_URI, auth=(config.NEO4J_USERNAME, config.NEO4J_PASSWORD))
+        config.NEO4J_URI, auth=(config.NEO4J_USERNAME, config.NEO4J_PASSWORD),
+        notifications_min_severity="OFF")
     try:
         resolved = [r for r in (resolve_entity(driver, s) for s in surfaces) if r]
         params: dict = {}

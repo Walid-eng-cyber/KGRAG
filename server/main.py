@@ -117,7 +117,10 @@ def shape_answer(raw: dict, latency_s: float, is_demo: bool = False) -> dict:
 
 @app.get("/api/meta")
 def meta() -> dict:
-    return {"demo": DEMO, "examples": demo.EXAMPLES, "tickers": ["AAPL", "MSFT", "NVDA"],
+    corpus = ([{"label": "AAPL", "detail": "10-K"}, {"label": "MSFT", "detail": "10-K"}, {"label": "NVDA", "detail": "10-K"}]
+              if DEMO else [{"label": "SEC Form 4", "detail": "insider trades"}])
+    return {"demo": DEMO, "examples": demo.EXAMPLES if DEMO else demo.LIVE_EXAMPLES,
+            "tickers": ["AAPL", "MSFT", "NVDA"], "corpus": corpus,
             "auth": {"enabled": auth.settings.enabled, "client_id": auth.settings.client_id or None,
                      "consent_text": CONSENT_TEXT},
             "models": {"router": config.ROUTER_MODEL, "answer": config.ANSWER_MODEL,

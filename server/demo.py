@@ -107,6 +107,16 @@ FIXTURES = [
     },
 ]
 
+# Example questions for a live server loaded with SEC Form 3/4/5 data (src/form4.py).
+LIVE_EXAMPLES = [
+    {"label": "Graph · insiders", "path": "GRAPH", "question": "Who are NVIDIA's insiders?"},
+    {"label": "Graph · trades", "path": "GRAPH", "question": "Which insiders traded Microsoft shares recently?"},
+    {"label": "Graph · aggregation", "path": "GRAPH", "question": "Were insiders net buyers or sellers of Tesla?"},
+    {"label": "Graph · ranking", "path": "GRAPH", "question": "What were the largest insider sales this quarter?"},
+    {"label": "Graph · multi-hop", "path": "GRAPH", "question": "Which companies share an insider with Alphabet?"},
+    {"label": "Graph · person", "path": "GRAPH", "question": "What did Colette Kress buy or sell?"},
+]
+
 EXAMPLES = [
     {"label": "Graph · list", "path": "GRAPH", "question": "What are Apple's subsidiaries?"},
     {"label": "Graph · aggregation", "path": "GRAPH", "question": "Compare the number of subsidiaries of Apple and Microsoft."},

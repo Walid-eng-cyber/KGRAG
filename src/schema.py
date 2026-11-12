@@ -74,3 +74,10 @@ EXTRACTION_HINT = (
     "locations, and the key risk factors it discloses. Use the company's common "
     "name (e.g. 'Apple' not 'Apple Inc., a California corporation')."
 )
+
+# --- Relations loaded from structured SEC data, not extracted by the LLM ---
+# (src/form4.py: SEC Forms 3/4/5 insider-transaction data sets)
+STRUCTURED_RELATIONS: list[tuple[str, str, str]] = [
+    ("PERSON", "INSIDER_OF", "COMPANY"),
+    ("PERSON", "TRADED", "COMPANY"),
+]

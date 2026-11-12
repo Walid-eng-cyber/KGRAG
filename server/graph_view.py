@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import re
 
-from src.answer import graph_triples
-from src.schema import VALIDATION_SCHEMA
+from src.answer import graph_edges
+from src.schema import STRUCTURED_RELATIONS, VALIDATION_SCHEMA
 
 # relation -> (subject type, object type). SEGMENT->OFFERS_PRODUCT is the only
 # relation with two subject types; COMPANY is the common case, so it wins.
 REL_TYPES: dict[str, tuple[str, str]] = {}
-for _subj, _rel, _obj in VALIDATION_SCHEMA:
+for _subj, _rel, _obj in [*VALIDATION_SCHEMA, *STRUCTURED_RELATIONS]:
     REL_TYPES.setdefault(_rel, (_subj, _obj))
 
 _CITE = re.compile(r"\[(G\d+|P\d+)\]")
@@ -23,7 +23,7 @@ _CITE = re.compile(r"\[(G\d+|P\d+)\]")
 # query types whose verbalization is ONE statement covering every row ([G1]),
 # versus one statement per row ([G1], [G2], ...).
 _SINGLE_STATEMENT = {"subsidiaries_of", "risks_of", "executives_of",
-                     "competitors_of", "regulators_of", "companies_facing_risk"}
+                     "competitors_of", "regulators_of", "companies_facing_risk", "insiders_of"}
 
 
 def cited_tags(text: str) -> list[str]:
@@ -50,41 +50,35 @@ def build_graph(graph_result: dict | None) -> dict:
     if qt == "count_subsidiaries" and rows:
         metrics = [{"label": g.get("params", {}).get("name", "count"),
                     "value": rows[0].get("count", 0), "tag": "G1"}]
+    elif qt == "insider_net_activity" and rows and (rows[0].get("value_bought") or rows[0].get("value_sold")):
+        metrics = [{"label": "Bought (open market, $)", "value": round(rows[0].get("value_bought") or 0), "tag": "G1"},
+                   {"label": "Sold (open market, $)", "value": round(rows[0].get("value_sold") or 0), "tag": "G2"}]
     elif qt == "compare_subsidiary_counts":
         metrics = [{"label": r.get("company"), "value": r.get("count", 0), "tag": f"G{i + 1}"}
                    for i, r in enumerate(rows)]
 
-    triples = graph_triples(g)
+    edges_in = graph_edges(g)
     if qt == "path_between":
         # Paths are undirected: a hop may arrive as (Export controls)-[FACES_RISK]-(Microsoft).
         # Orient each hop so a queried endpoint (a/b, the entities asked about) is the subject.
         ends = {str(v) for k, v in g.get("params", {}).items() if k in ("a", "b")}
-        triples = [(d, r, s) if d in ends and s not in ends else (s, r, d) for s, r, d in triples]
+        edges_in = [(d, r, s, i) if d in ends and s not in ends else (s, r, d, i) for s, r, d, i in edges_in]
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
-    for i, (src, rel, dst) in enumerate(triples):
+    for i, (src, rel, dst, row) in enumerate(edges_in):
         s_type, o_type = REL_TYPES.get(rel, ("COMPANY", "COMPANY"))
+        # Form 4 rows say whether the insider is a person or a fund/firm (10% owners often are).
+        row_type = rows[row].get("_insider_type") if row < len(rows) else None
+        if row_type and rel in ("INSIDER_OF", "TRADED") and qt != "companies_sharing_insiders":
+            s_type = row_type
         for name, typ, role in ((src, s_type, "anchor"), (dst, o_type, "target")):
             nid = _node_id(name)
             node = nodes.setdefault(nid, {"id": nid, "label": name, "type": typ, "role": role})
             if role == "anchor":
                 node["role"] = "anchor"   # an entity that is ever a subject is an anchor
-        if qt in _SINGLE_STATEMENT:
-            tag = "G1"
-        elif qt == "path_between":
-            tag = None  # filled below per path row
-        else:
-            tag = f"G{i + 1}"
+        tag = "G1" if qt in _SINGLE_STATEMENT else f"G{row + 1}"
         edges.append({"id": f"e{i}", "source": _node_id(src), "target": _node_id(dst),
                       "relation": rel, "tag": tag})
-
-    if qt == "path_between":
-        k = 0
-        for r_i, r in enumerate(rows):
-            for _ in range(len(r.get("relations", []))):
-                if k < len(edges):
-                    edges[k]["tag"] = f"G{r_i + 1}"
-                k += 1
 
     anchors = [n for n in nodes.values() if n["role"] == "anchor"]
     if not edges:
