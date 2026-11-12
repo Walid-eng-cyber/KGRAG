@@ -1,6 +1,8 @@
-import type { Health, Meta } from "../types";
+import type { Health, Meta, User } from "../types";
 
-export type Page = "ask" | "benchmark";
+export type Page = "ask" | "benchmark" | "admin";
+
+const LABEL: Record<Page, string> = { ask: "Ask", benchmark: "Benchmark", admin: "Accounts" };
 
 const SERVICES: { key: keyof Health["services"]; name: string }[] = [
   { key: "neo4j", name: "Neo4j" },
@@ -22,9 +24,13 @@ interface Props {
   onNavigate: (p: Page) => void;
   meta: Meta | null;
   health: Health | null;
+  user: User | null;
+  onSignOut: () => void;
+  onToggleUpdates: (on: boolean) => void;
 }
 
-export function Sidebar({ page, onNavigate, meta, health }: Props) {
+export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onToggleUpdates }: Props) {
+  const pages: Page[] = user?.role === "admin" ? ["ask", "benchmark", "admin"] : ["ask", "benchmark"];
   return (
     <aside className="side">
       <div className="brand">
@@ -32,9 +38,9 @@ export function Sidebar({ page, onNavigate, meta, health }: Props) {
         <div><div className="brand-name">KGRAG</div><div className="brand-sub">Knowledge-graph RAG · local</div></div>
       </div>
       <nav className="nav" aria-label="Pages">
-        {(["ask", "benchmark"] as Page[]).map((p) => (
+        {pages.map((p) => (
           <button key={p} aria-current={page === p ? "page" : undefined} onClick={() => onNavigate(p)}>
-            <span className="nav-dot" />{p === "ask" ? "Ask" : "Benchmark"}
+            <span className="nav-dot" />{LABEL[p]}
           </button>
         ))}
       </nav>
@@ -64,6 +70,21 @@ export function Sidebar({ page, onNavigate, meta, health }: Props) {
           </>
         )}
       </div>
+      {user && (
+        <div className="account">
+          <div className="account-row">
+            <div className="account-who" title={user.email}>
+              <span className="account-name">{user.name}</span>
+              <span className="model">{user.email}</span>
+            </div>
+            <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+          </div>
+          <label className="updates-toggle">
+            <input type="checkbox" checked={user.updates_opt_in} onChange={(e) => onToggleUpdates(e.target.checked)} />
+            Email me about updates
+          </label>
+        </div>
+      )}
     </aside>
   );
 }
