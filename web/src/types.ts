@@ -1,0 +1,121 @@
+// JSON contract served by server/main.py.
+
+export type EntityType =
+  | "COMPANY"
+  | "PERSON"
+  | "PRODUCT"
+  | "SEGMENT"
+  | "RISK"
+  | "AUDITOR"
+  | "LOCATION"
+  | "GOVERNMENT_AGENCY"
+  | "STOCK_EXCHANGE";
+
+export type RoutePath = "GRAPH" | "VECTOR" | "HYBRID" | "NONE";
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: EntityType;
+  role: "anchor" | "target";
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  relation: string;
+  tag: string | null;
+}
+
+export interface Metric {
+  label: string;
+  value: number;
+  tag: string;
+}
+
+export interface GraphView {
+  query_type: string | null;
+  cypher: string | null;
+  layout: "radial" | "bipartite" | "path" | "none";
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  metrics: Metric[];
+  error?: string | null;
+}
+
+export interface Source {
+  tag: string;
+  kind: "graph" | "passage";
+  text: string;
+  cite?: string | null;
+}
+
+export interface Passage {
+  tag: string | null;
+  chunk_id: string;
+  doc_id: string;
+  section: string;
+  filing_date: string;
+  similarity: number;
+  text: string;
+}
+
+export interface AskResponse {
+  question: string;
+  path: RoutePath;
+  path_label: string;
+  classified: string | null;
+  confidence: number | null;
+  answer: string;
+  cited: string[];
+  citations_valid: boolean;
+  attempts: number;
+  uncited_claims: string[];
+  sources: Source[];
+  graph: GraphView;
+  passages: Passage[];
+  latency_s: number;
+  demo: boolean;
+}
+
+export interface Example {
+  label: string;
+  path: RoutePath;
+  question: string;
+}
+
+export interface Meta {
+  demo: boolean;
+  examples: Example[];
+  tickers: string[];
+  models: { router: string; answer: string; embed: string };
+}
+
+export interface ServiceStatus {
+  ok: boolean;
+  detail: string;
+}
+
+export interface Health {
+  ok: boolean;
+  demo: boolean;
+  services: Record<"neo4j" | "postgres" | "ollama", ServiceStatus>;
+  models: Meta["models"];
+}
+
+export interface BenchmarkCategory {
+  key: string;
+  label: string;
+  graphrag: number;
+  vector: number;
+  n: number;
+}
+
+export interface Benchmark {
+  source: "published" | "results-file";
+  categories: BenchmarkCategory[];
+  overall: { graphrag: number; vector: number; n: number };
+  latency: { graphrag_median_s: number | null; vector_median_s: number | null };
+  costs: { label: string; vector: string | null; graphrag: string | null }[];
+}

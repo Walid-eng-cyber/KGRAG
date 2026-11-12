@@ -27,7 +27,7 @@ jobs:
       - name: Ruff (syntax errors and undefined names)
         run: ruff check --select E9,F63,F7,F82 --target-version py311 .
       - name: Byte-compile every file
-        run: python -m compileall -q src app.py config.py
+        run: python -m compileall -q src server app.py config.py
 
   imports:
     name: imports
@@ -39,7 +39,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Import every module (no databases or Ollama needed)
         run: |
           python - <<'EOF'
@@ -47,6 +47,7 @@ jobs:
           import pkgutil
 
           import config  # noqa: F401
+          import server.main  # noqa: F401
           import src
 
           names = [m.name for m in pkgutil.iter_modules(src.__path__)]
@@ -54,3 +55,26 @@ jobs:
               importlib.import_module(f"src.{name}")
           print(f"imported config + {len(names)} modules: {', '.join(names)}")
           EOF
+      - name: API tests (answer() is stubbed; no databases needed)
+        run: pytest -q
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npx vite build
