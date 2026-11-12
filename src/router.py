@@ -175,6 +175,12 @@ def route(question: str) -> dict:
         result = {"vector": vector_path(question), "graph": graph_path(question)}
     elif path == Path.GRAPH:
         chosen, result = "GRAPH", {"graph": graph_path(question)}
+        if not result["graph"].get("rows"):
+            # Nothing structured matched (no template fit, or the facts were never
+            # extracted as triples): fall back to the text before giving up.
+            vec = vector_path(question)
+            if vec:
+                chosen, result = "VECTOR (graph found nothing)", {**result, "vector": vec}
     else:
         chosen, result = "VECTOR", {"vector": vector_path(question)}
 

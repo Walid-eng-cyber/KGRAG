@@ -79,6 +79,23 @@ export interface AskResponse {
   demo: boolean;
 }
 
+export type DocumentStatus = "uploaded" | "queued" | "ingesting" | "ready" | "failed";
+
+export interface DocumentInfo {
+  id: string;
+  filename: string;
+  title: string;
+  kind: "pdf" | "text" | "html";
+  size_bytes: number;
+  status: DocumentStatus;
+  progress: number | null;
+  message: string | null;
+  chunks: number | null;
+  uploaded_by: string | null;
+  uploaded_at: string;
+  ingested_at: string | null;
+}
+
 export interface Example {
   label: string;
   path: RoutePath;

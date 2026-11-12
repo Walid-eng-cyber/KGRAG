@@ -1,4 +1,5 @@
 import type { Health, Meta, User } from "../types";
+import { DocumentsPanel } from "./DocumentsPanel";
 
 export type Page = "ask" | "benchmark" | "admin";
 
@@ -50,6 +51,9 @@ export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onTog
           <div className="side-row" key={c.label}><span className="ticker">{c.label}</span><span className="muted">{c.detail}</span></div>
         ))}
       </div>
+      {meta && (!meta.auth.enabled || user) && (
+        <DocumentsPanel canManage={!meta.auth.enabled || user?.role === "admin"} />
+      )}
       <div className="spacer" />
       <div className="status" aria-label="Local stack status">
         <div className="side-label" style={{ padding: "0 0 4px" }}>Local stack</div>

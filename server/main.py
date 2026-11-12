@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from time import perf_counter
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,7 +29,9 @@ from server.benchmark_view import benchmark_summary
 from server.graph_view import build_graph, cited_tags
 from server.health import health
 from server.security import SecurityHeaders, check_public_config, cors_origins, docs_enabled
+from server.doc_store import DocumentStore, IngestWorker
 from server.users import CONSENT_TEXT
+from src import documents as docs
 
 DEMO = os.getenv("KGRAG_DEMO", "").lower() in {"1", "true", "yes"}
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -225,6 +227,70 @@ def ask(req: AskRequest) -> dict:
 @app.get("/api/benchmark", dependencies=[Depends(auth.require_user)])
 def get_benchmark() -> dict:
     return benchmark_summary()
+
+
+# ---------------------------------------------------------------------------
+# Documents the system answers from (upload + ingest)
+# ---------------------------------------------------------------------------
+
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
+doc_store = DocumentStore(os.getenv("DOCUMENTS_DB", str(config.DATA_DIR / "documents.db")),
+                          os.getenv("UPLOAD_DIR", str(config.DATA_DIR / "uploads")), recover=True)
+ingest_worker = IngestWorker(doc_store, docs.extract_text, docs.ingest_text)
+
+
+@app.get("/api/documents")
+def list_documents(_: dict | None = Depends(auth.require_user)) -> dict:
+    return {"documents": doc_store.list(), "max_upload_mb": MAX_UPLOAD_MB,
+            "accepted": sorted(docs.SUPPORTED)}
+
+
+@app.post("/api/documents")
+async def upload_document(file: UploadFile = File(...), title: str = Form(""),
+                          admin: dict | None = Depends(auth.require_admin_or_local)) -> dict:
+    name = Path(file.filename or "document").name[:200]
+    try:
+        kind = docs.kind_for(name)
+    except docs.DocumentError as e:
+        raise HTTPException(status_code=415, detail=str(e)) from e
+    data = await file.read(MAX_UPLOAD_MB * 1024 * 1024 + 1)
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Files can be at most {MAX_UPLOAD_MB} MB.")
+    if not data:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if kind == "pdf" and not data.startswith(b"%PDF-"):
+        raise HTTPException(status_code=415, detail="This file isn't a valid PDF.")
+    clean_title = (title.strip() or Path(name).stem)[:200]
+    doc = doc_store.add(name, clean_title, kind, Path(name).suffix.lower(), data,
+                        admin["email"] if admin else None)
+    return {"document": doc_store.get(doc["id"])}
+
+
+@app.post("/api/documents/ingest")
+def ingest_documents(_: dict | None = Depends(auth.require_admin_or_local)) -> dict:
+    """Queue every document that isn't ingested yet (uploaded or failed)."""
+    queued = [d["id"] for d in doc_store.list() if d["status"] in ("uploaded", "failed")]
+    for doc_id in queued:
+        ingest_worker.enqueue(doc_id)
+    return {"queued": queued}
+
+
+@app.delete("/api/documents/{doc_id}")
+def delete_document(doc_id: str, _: dict | None = Depends(auth.require_admin_or_local)) -> dict:
+    doc = doc_store.get(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="No such document.")
+    if doc["status"] in ("queued", "ingesting"):
+        raise HTTPException(status_code=409, detail="Wait for ingestion to finish before removing it.")
+    if doc["status"] == "ready":
+        try:
+            docs.remove_document(doc_id)
+        except Exception as e:  # noqa: BLE001
+            log.exception("removing document data failed")
+            raise HTTPException(status_code=503, detail="Couldn't remove its data from the graph. "
+                                                        "The details are in the server log.") from e
+    doc_store.delete(doc_id)
+    return {"ok": True}
 
 
 # Serve the built React app (web/dist) when it exists; the dev server proxies /api instead.

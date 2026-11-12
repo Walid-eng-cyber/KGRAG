@@ -33,3 +33,7 @@ uvicorn[standard]>=0.30.0
 # Sign in with Google (server/auth.py)
 google-auth>=2.30.0
 itsdangerous>=2.2.0
+
+# Uploaded documents (server/doc_store.py, src/documents.py)
+pypdf>=6.0.0
+python-multipart>=0.0.20

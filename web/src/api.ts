@@ -1,4 +1,4 @@
-import type { Account, AccountStatus, AskResponse, Benchmark, Health, Meta, User } from "./types";
+import type { Account, AccountStatus, AskResponse, Benchmark, DocumentInfo, Health, Meta, User } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -53,6 +53,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ opt_in }),
     }),
+  documents: () => request<{ documents: DocumentInfo[]; max_upload_mb: number; accepted: string[] }>("/api/documents"),
+  uploadDocument: (file: File, title = "") => {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("title", title);
+    return request<{ document: DocumentInfo }>("/api/documents", { method: "POST", body });
+  },
+  ingestDocuments: () => request<{ queued: string[] }>("/api/documents/ingest", { method: "POST" }),
+  deleteDocument: (id: string) => request<{ ok: boolean }>(`/api/documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   adminUsers: (status?: AccountStatus) =>
     request<{ users: Account[] }>(`/api/admin/users${status ? `?status=${status}` : ""}`),
   adminSetStatus: (email: string, status: AccountStatus) =>

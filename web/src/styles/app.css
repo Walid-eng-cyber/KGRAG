@@ -366,3 +366,30 @@ table.accounts .actions .btn { padding: 6px 12px; font-size: 12px; margin-left: 
 .status-pill.pending { background: var(--warn-bg); color: #6b4e16; }
 .status-pill.approved { background: var(--ok-bg); color: var(--ok-ink); }
 .status-pill.rejected, .status-pill.disabled { background: #fbeae6; color: var(--bad); }
+
+/* ---------- documents (sidebar) ---------- */
+.side { overflow-y: auto; }
+.docs { display: flex; flex-direction: column; gap: 8px; }
+.docs-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 0; }
+.docs-count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.docs-empty { margin: 0; padding: 0 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.docs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.doc { padding: 6px 10px; border-radius: 7px; display: flex; flex-direction: column; gap: 4px; }
+.doc:hover { background: var(--surface-2); }
+.doc-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.doc-kind { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 1px 4px; border-radius: 3px; background: #f1f0ec; color: #5c5b55; flex-shrink: 0; }
+.doc-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.doc-remove { border: 0; background: none; color: var(--muted-2); font-size: 16px; line-height: 1; padding: 0 2px; visibility: hidden; }
+.doc:hover .doc-remove, .doc-remove:focus-visible { visibility: visible; }
+.doc-remove:hover { color: var(--bad); }
+.doc-msg { font-size: 11px; color: var(--muted); line-height: 1.4; padding-left: 30px; }
+.doc-msg.ready { color: var(--ok-ink); }
+.doc-msg.failed { color: var(--bad); }
+.doc-bar { display: block; height: 4px; margin-left: 30px; background: #ebe9e3; border-radius: 2px; overflow: hidden; }
+.doc-bar span { display: block; height: 4px; background: var(--ink); border-radius: 2px; transition: width 0.6s ease; }
+.doc.queued .doc-bar span { width: 0; }
+.docs-actions { display: flex; gap: 8px; padding: 0 10px; }
+.docs-actions .btn { flex: 1; padding: 7px 10px; font-size: 12px; }
+.docs-hint { padding: 0 10px; font-size: 11px; color: var(--muted-2); line-height: 1.4; }
+.docs-error { margin: 0 10px; padding: 8px 10px; border-radius: 7px; background: #fdf6f4; border: 1px solid #f0cfc7; color: #7a2f1f; font-size: 12px; }
+@media (max-width: 900px) { .side .docs { display: none; } }

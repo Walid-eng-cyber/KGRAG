@@ -186,24 +186,30 @@ def graph_triples(g: dict) -> list[tuple[str, str, str]]:
     return [(s, r, t) for s, r, t, _ in graph_edges(g)]
 
 
+PASSAGE_CHARS = 1200  # enough of each chunk (512 tokens ~ 2,000 chars) to hold its key facts
+
+
 def format_passages(vs: list[dict], limit: int = 4) -> list[tuple[str, str]]:
     """(citation, passage-text) tuples from vector hits."""
     out = []
     for r in vs[:limit]:
         cite = (f"{r['doc_id']} · {r['section_path']} · {r['filing_date']} "
                 f"(chunk {r['chunk_id'][:8]})")
-        text = re.sub(r"\s+", " ", r["text"]).strip()[:400]
+        text = re.sub(r"\s+", " ", r["text"]).strip()[:PASSAGE_CHARS]
         out.append((cite, text))
     return out
 
 
-def _dedup_passages(vs: list[dict], graph_src_chunks: set[str]) -> list[dict]:
-    """Cross-set + intra-set dedup: drop a passage that is already the source
-    chunk of a graph-derived fact (cross-set), or a repeat chunk (intra-set)."""
+def _dedup_passages(vs: list[dict], graph_src_chunks: set[str] | None = None) -> list[dict]:
+    """Drop repeated chunks (intra-set dedup).
+
+    A passage that is also the source of a graph fact is KEPT: the fact is one
+    triple, while the passage usually holds more (and the planner may have picked
+    a template that doesn't cover the question). Dropping it lost answers."""
     out, seen = [], set()
     for r in vs:
         cid = r["chunk_id"]
-        if cid in graph_src_chunks or cid in seen:
+        if cid in seen:
             continue
         seen.add(cid)
         out.append(r)

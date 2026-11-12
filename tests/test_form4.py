@@ -141,3 +141,16 @@ def test_typo_prices_are_flagged_suspect():
     t.append({"issuer": "4", "price": 52316.7, "value": 52316.7 * 34800})   # no baseline, absurd per-share price
     flag_suspect_prices(t)
     assert [x["price_suspect"] for x in t] == [False, False, False, True, True, False, True]
+
+
+def test_empty_graph_result_falls_back_to_vector(monkeypatch):
+    import src.router as router
+    monkeypatch.setattr(router, "classify", lambda q: (router.Path.GRAPH, 0.9))
+    monkeypatch.setattr(router, "graph_path", lambda q: {"query_type": "risks_of", "rows": [], "cypher": None})
+    monkeypatch.setattr(router, "vector_path", lambda q, k=5: [{"chunk_id": "c1", "doc_id": "DOC-1", "section_path": "x",
+                                                               "filing_date": None, "text": "risks", "similarity": 0.8}])
+    monkeypatch.setattr(router.routerlog, "log", lambda rec: None)
+    r = router.route("What risks does Zentrix describe?")
+    assert r["path_used"] == "VECTOR (graph found nothing)" and r["result"]["vector"]
+    monkeypatch.setattr(router, "graph_path", lambda q: {"query_type": "risks_of", "rows": [{"risk": "x"}], "cypher": "M"})
+    assert router.route("q")["path_used"] == "GRAPH"
