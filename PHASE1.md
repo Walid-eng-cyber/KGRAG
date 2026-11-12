@@ -141,7 +141,7 @@ centre: step ③ writes it, steps ④–⑤ refine it, step ⑥ reads it.
    ```bash
    docker compose up -d
    ```
-   Browser UI: http://localhost:7474 · credentials `neo4j` / `kgrag-password`
+   Browser UI: http://localhost:7474 · user `neo4j`, password `NEO4J_PASSWORD` from `.env`
    · Bolt: `bolt://localhost:7687`.
 
 ---
@@ -156,7 +156,7 @@ All configuration is environment-driven (`.env`), loaded by `config.py`.
 | `OLLAMA_BASE_URL` | Ollama endpoint | `http://localhost:11434` |
 | `EMBED_MODEL` | Embedding model for entity resolution | `bge-m3` |
 | `RESOLVE_THRESHOLD` | Cosine cutoff to merge entities | `0.90` |
-| `NEO4J_URI` / `_USERNAME` / `_PASSWORD` | Graph DB connection | `bolt://localhost:7687` / `neo4j` / `kgrag-password` |
+| `NEO4J_URI` / `_USERNAME` / `_PASSWORD` | Graph DB connection | `bolt://localhost:7687` / `neo4j` / *(required, no default)* |
 | `SEC_USER_AGENT` | Identity sent to EDGAR (required) | — |
 | `MAX_FILING_CHARS` | Per-filing extraction cap | `20000` |
 | `PRICE_PER_1M_INPUT` / `_OUTPUT` | Token prices for the budget estimator | `0.0` |
@@ -476,7 +476,7 @@ against a $0.10 ceiling.
   `MAX_FILING_CHARS`, use fewer tickers, or a smaller model; long runs can be
   backgrounded.
 - **Neo4j connection errors** — ensure Docker is running and the container is up
-  (`docker compose up -d`); credentials are `neo4j` / `kgrag-password`.
+  (`docker compose up -d`); the password is `NEO4J_PASSWORD` from `.env`.
 - **Docker Desktop won't start / daemon unreachable (Windows)** — zombie Docker
   processes can block a clean start. Kill all `*docker*` processes, run
   `wsl --shutdown`, then start a single Docker Desktop and wait for the daemon.

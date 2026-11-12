@@ -91,7 +91,7 @@ question → router → { vector | graph | both } → merge + verbalize
    ```bash
    cp .env.example .env
    ```
-   Edit `.env`: set a real `SEC_USER_AGENT` (SEC requires a name + contact email,
+   Edit `.env`: choose passwords for `NEO4J_PASSWORD` and `PG_PASSWORD`, and set a real `SEC_USER_AGENT` (SEC requires a name + contact email,
    e.g. `Jane Doe jane@acme.com`). No API key needed for the local stack.
 
 3. **Install Python deps**
@@ -103,7 +103,7 @@ question → router → { vector | graph | both } → merge + verbalize
    ```bash
    docker compose up -d          # Neo4j (7474/7687) + Postgres/pgvector (5434)
    ```
-   Neo4j Browser: http://localhost:7474 (neo4j / kgrag-password).
+   Neo4j Browser: http://localhost:7474 (user `neo4j`, password: `NEO4J_PASSWORD` from your `.env`).
 
 ## Run it end to end
 
@@ -193,6 +193,21 @@ updates" box. Ticking it stores the consent time and the exact wording shown;
 users can turn it off from their account, and every account has a one-click
 unsubscribe link (`/api/unsubscribe?token=…`). Only approved accounts that
 opted in count as subscribers. Sending the emails is not built yet.
+
+#### Deploying (checklist)
+Before the API is reachable by anyone else:
+- **Passwords:** set strong `NEO4J_PASSWORD` and `PG_PASSWORD` in `.env`
+  (Docker Compose reads the same file). With sign-in on and `COOKIE_SECURE=1`
+  the API refuses to start on empty or default passwords. The databases only
+  listen on `127.0.0.1`; keep it that way.
+- **HTTPS + sign-in:** set `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS`, `SESSION_SECRET`,
+  `COOKIE_SECURE=1`. Responses carry a Content-Security-Policy, HSTS and
+  clickjacking protection.
+- **UI on another domain (e.g. Netlify):** build the UI with
+  `VITE_API_URL=https://your-api.example.com npm run build`, and on the API set
+  `CORS_ORIGINS=https://your-site.netlify.app` and `COOKIE_SAMESITE=none`.
+- **API docs** (`/docs`) stay off unless `KGRAG_DOCS=1`.
+- Errors shown to users are generic; details go to the server log.
 
 ### Phase 5 — benchmark
 ```bash

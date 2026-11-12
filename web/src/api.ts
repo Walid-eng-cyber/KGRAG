@@ -6,10 +6,14 @@ export class ApiError extends Error {
   }
 }
 
+// Empty = same origin (the API serves the UI). Set VITE_API_URL at build time when the
+// UI is hosted elsewhere (e.g. Netlify) and the API runs on another domain.
+const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, init);
+    res = await fetch(`${BASE}${path}`, { credentials: "include", ...init });
   } catch {
     throw new ApiError("Can't reach the KGRAG API. Is `uvicorn server.main:app` running on :8000?", 0);
   }

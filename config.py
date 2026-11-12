@@ -27,14 +27,14 @@ RESOLVE_THRESHOLD = float(os.getenv("RESOLVE_THRESHOLD", "0.90"))
 # --- Neo4j (the graph) ---
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "kgrag-password")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")  # set in .env; no built-in default
 
 # --- Postgres + pgvector (the vector index, Phase 2) ---
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = int(os.getenv("PG_PORT", "5434"))
 PG_DB = os.getenv("PG_DB", "kgrag")
 PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "kgrag-password")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "")  # set in .env; no built-in default
 # bge-m3 produces 1024-dim embeddings.
 VECTOR_DIM = int(os.getenv("VECTOR_DIM", "1024"))
 

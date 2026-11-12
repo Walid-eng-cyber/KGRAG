@@ -10,6 +10,7 @@ Set KGRAG_DEMO=1 to serve labelled sample answers without Neo4j/Postgres/Ollama.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from time import perf_counter
@@ -22,20 +23,31 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-import config  # noqa: F401 - loads .env before auth settings are read
+import config  # loads .env before auth settings are read
 from server import auth, demo
 from server.benchmark_view import benchmark_summary
 from server.graph_view import build_graph, cited_tags
 from server.health import health
+from server.security import SecurityHeaders, check_public_config, cors_origins, docs_enabled
 from server.users import CONSENT_TEXT
 
 DEMO = os.getenv("KGRAG_DEMO", "").lower() in {"1", "true", "yes"}
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
-app = FastAPI(title="KGRAG API", version="1.2.0-dev")
+log = logging.getLogger("kgrag.api")
+
+check_public_config(auth.settings.enabled, auth.settings.cookie_secure, DEMO,
+                    config.NEO4J_PASSWORD, config.PG_PASSWORD)
+
+_DOCS = docs_enabled()
+app = FastAPI(title="KGRAG API", version="1.3.0-dev",
+              docs_url="/docs" if _DOCS else None, redoc_url=None,
+              openapi_url="/openapi.json" if _DOCS else None)
+app.add_middleware(SecurityHeaders, hsts=auth.settings.cookie_secure)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_origins(),
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Content-Type"],
 )
@@ -199,10 +211,11 @@ def ask(req: AskRequest) -> dict:
     try:
         from src.answer import answer
         raw = answer(req.question.strip())
-    except Exception as e:  # noqa: BLE001 - surface any backend failure to the UI
+    except Exception as e:  # noqa: BLE001 - log the details, show the user a generic message
+        log.exception("answer() failed")
         raise HTTPException(status_code=503,
-                            detail=f"Backend error ({type(e).__name__}): {e}. "
-                                   "Are Neo4j, Postgres and Ollama running?") from e
+                            detail="KGRAG couldn't answer right now: a backend service (Neo4j, Postgres or Ollama) "
+                                   "isn't available. The details are in the server log.") from e
     return shape_answer(raw, perf_counter() - t0)
 
 

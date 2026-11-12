@@ -117,7 +117,7 @@ def test_ask_backend_failure_is_a_503(client, monkeypatch):
     monkeypatch.setattr(main, "DEMO", False)
     monkeypatch.setattr("src.answer.answer", boom)
     r = client.post("/api/ask", json={"question": "anything at all"})
-    assert r.status_code == 503 and "ConnectionError" in r.json()["detail"]
+    assert r.status_code == 503 and "server log" in r.json()["detail"]
 
 
 def test_ask_validates_input(client):
