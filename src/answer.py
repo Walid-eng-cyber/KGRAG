@@ -372,10 +372,21 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
     for attempts in range(1, config.ANSWER_MAX_RETRIES + 2):
         text = client.chat(model=config.ANSWER_MODEL, messages=messages)["message"]["content"].strip()
         invalid, uncited = validate_citations(text, valid_tags)
-        if not invalid and not uncited:
+        empty = len(_CITE.sub(" ", text).split()) < 2          # e.g. just "[G1]"
+        if not invalid and not uncited and not empty:
             break
-        messages += [{"role": "assistant", "content": text},
-                     {"role": "user", "content": _corrective(valid_tags, invalid, uncited)}]
+        fix = _corrective(valid_tags, invalid, uncited) if (invalid or uncited) else ""
+        if empty:
+            fix = ("Your reply had no answer text, only a citation. Write the answer to the question in "
+                   "words, then cite it. " + fix).strip()
+        messages += [{"role": "assistant", "content": text}, {"role": "user", "content": fix}]
+    else:
+        # Still no words after every retry: answer with the fact itself (computed first, then graph).
+        if len(_CITE.sub(" ", text).split()) < 2:
+            best = next((s for s in sources if s["tag"].startswith("C")), None) or \
+                   next((s for s in sources if s["tag"].startswith("G")), None)
+            if best:
+                text = f"{best['text']} [{best['tag']}]"
 
     # Fail-safe: if a hallucinated citation survived all retries, strip it so no
     # invented source is ever presented to the user.
