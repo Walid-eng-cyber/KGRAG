@@ -402,7 +402,7 @@ def _resolve(session, corpus_id: str, surface: str) -> str | None:
 def plan(question: str, schema: dict) -> dict:
     import json
 
-    import ollama
+    from src.llm import chat_client
     docs = "\n".join(
         f"- {k} ({'entities: ' + str(t['entity_slots']) if 'entity_slots' in t else ''}"
         f"{', ' if 'entity_slots' in t and 'value_slot' in t else ''}"
@@ -414,7 +414,7 @@ def plan(question: str, schema: dict) -> dict:
               f"ENTITY TYPES: {', '.join(schema['entities'])}\n"
               f"RELATIONS: {', '.join(sorted({r[1] for r in schema['relations']}))}\n"
               'Reply ONLY JSON: {"query_type":"...","entities":["..."],"value":"..."}.')
-    client = ollama.Client(host=config.OLLAMA_BASE_URL)
+    client = chat_client()
     resp = client.chat(model=config.ROUTER_MODEL, format="json",
                        messages=[{"role": "system", "content": system}, {"role": "user", "content": question}])
     return json.loads(resp["message"]["content"])

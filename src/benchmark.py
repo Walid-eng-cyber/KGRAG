@@ -26,10 +26,9 @@ import re
 from collections import defaultdict
 from time import perf_counter
 
-import ollama
-
 import config
 from src.answer import answer
+from src.llm import chat_client
 from src.vectorize import retrieve
 
 # --- Scoring expectations -----------------------------------------------------
@@ -148,7 +147,7 @@ def vanilla_rag(question: str, k: int = 5) -> str:
     system = ("Answer the question using ONLY the passages below. If they do not "
               "contain the answer, reply exactly: \"I don't have enough "
               "information.\" Be concise.")
-    resp = ollama.Client(host=config.OLLAMA_BASE_URL).chat(
+    resp = chat_client().chat(
         model=config.ANSWER_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": f"Question: {question}\n\nPassages:\n{ctx}"}])

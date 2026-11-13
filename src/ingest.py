@@ -24,6 +24,7 @@ import config
 from src.budget import estimate
 from src.cache import doc_hash, is_cached, record
 from src.edgar import fetch_10k_text
+from src.llm import is_hosted
 from src.pricing import resolve_prices
 from src.schema import EXTRACTION_HINT, Entities, Relations, VALIDATION_SCHEMA
 
@@ -38,9 +39,24 @@ def _stable_chunk_id(i: int, doc: Document) -> str:
     return hashlib.sha1(f"{doc.doc_id}:{i}".encode()).hexdigest()
 
 
-def build_llm() -> Ollama:
+def build_llm():
+    if is_hosted():
+        # OpenAI-compatible API (e.g. Kimi K3.1 Pro on Moonshot). Function calling
+        # lets SchemaLLMPathExtractor use tool calls for structured triples.
+        from llama_index.llms.openai_like import OpenAILike
+        return OpenAILike(
+            model=config.EXTRACT_MODEL,
+            api_base=config.LLM_BASE_URL,
+            api_key=config.LLM_API_KEY,
+            is_chat_model=True,
+            is_function_calling_model=True,
+            context_window=128_000,
+            max_tokens=1024,
+            timeout=float(config.EXTRACTION_TIMEOUT_S),
+            max_retries=3,
+        )
     return Ollama(
-        model=config.OLLAMA_MODEL,
+        model=config.EXTRACT_MODEL,
         base_url=config.OLLAMA_BASE_URL,
         # Local models are slower than a hosted API — give each call room.
         request_timeout=float(config.EXTRACTION_TIMEOUT_S),
@@ -59,7 +75,7 @@ def build_graph_store() -> Neo4jPropertyGraphStore:
     )
 
 
-def build_extractor(llm: Ollama) -> SchemaLLMPathExtractor:
+def build_extractor(llm) -> SchemaLLMPathExtractor:
     return SchemaLLMPathExtractor(
         llm=llm,
         possible_entities=Entities,
@@ -100,12 +116,12 @@ def load_documents(tickers: list[str], force: bool = False) -> list[Document]:
 def _budget_gate(documents: list[Document], assume_yes: bool) -> None:
     """Stop a paid run from spending without a check. Free/local models pass
     silently; any non-zero estimate must clear the ceiling AND be confirmed."""
-    price_in, price_out = resolve_prices(config.OLLAMA_MODEL)
+    price_in, price_out = resolve_prices(config.EXTRACT_MODEL)
     total = sum(estimate(d.text, price_in, price_out)["cost"] for d in documents)
     if total == 0.0:
         return  # local / free model — no financial risk
 
-    print(f"\n  PAID MODEL: {config.OLLAMA_MODEL} "
+    print(f"\n  PAID MODEL: {config.EXTRACT_MODEL} "
           f"(${price_in}/${price_out} per 1M tokens)")
     print(f"  Estimated cost for {len(documents)} document(s): ${total:.2f}")
     print(f"  Budget ceiling (BUDGET_LIMIT_USD): ${config.BUDGET_LIMIT_USD:.2f}")
@@ -126,7 +142,7 @@ def main(tickers: list[str], force: bool = False, assume_yes: bool = False) -> N
     llm = build_llm()
     Settings.llm = llm  # ensure LlamaIndex never falls back to OpenAI
 
-    print(f"Extraction model (Ollama): {config.OLLAMA_MODEL}")
+    print(f"Extraction model ({config.LLM_PROVIDER}): {config.EXTRACT_MODEL}")
     print(f"Neo4j: {config.NEO4J_URI}")
     print(f"Tickers: {', '.join(tickers)}\n")
 

@@ -20,11 +20,10 @@ from enum import Enum
 from time import perf_counter
 from typing import get_args
 
-import ollama
-
 import config
 from src import routerlog
 from src.graph_query import run_graph_query
+from src.llm import chat_client
 from src.schema import Entities, Relations
 from src.vectorize import retrieve as vector_retrieve
 
@@ -107,7 +106,7 @@ def classify(question: str) -> tuple[Path, float]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     messages.append({"role": "user", "content": question})
 
-    client = ollama.Client(host=config.OLLAMA_BASE_URL)
+    client = chat_client()
     try:
         resp = client.chat(model=config.ROUTER_MODEL, messages=messages, format="json")
         data = json.loads(resp["message"]["content"])

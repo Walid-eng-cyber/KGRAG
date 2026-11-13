@@ -102,9 +102,8 @@ def ours(question: str, corpus: dict, today: date) -> dict:
 def baseline(question: str, corpus: dict, today: date, k: int = 5) -> dict:
     """Plain vector RAG over the same corpus: top-k passages + the same answer model.
     It gets today's date too, so the comparison is about retrieval and tools, not the calendar."""
-    import ollama
-
     import config
+    from src.llm import chat_client
     from src.vectorize import retrieve
     hits = retrieve(question, k, corpus["id"])
     if not hits:
@@ -112,7 +111,7 @@ def baseline(question: str, corpus: dict, today: date, k: int = 5) -> dict:
     ctx = "\n".join(f"[{i + 1}] {' '.join(h['text'].split())[:1200]}" for i, h in enumerate(hits))
     system = (f"Today is {today:%d %B %Y}. Answer the question using ONLY the passages below. If they do not "
               "contain the answer, reply exactly: \"I don't have enough information.\" Be concise.")
-    resp = ollama.Client(host=config.OLLAMA_BASE_URL).chat(
+    resp = chat_client().chat(
         model=config.ANSWER_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": f"Question: {question}\n\nPassages:\n{ctx}"}])

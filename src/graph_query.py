@@ -17,10 +17,11 @@ from __future__ import annotations
 import difflib
 import json
 
-import ollama
+from src.llm import chat_client
 from neo4j import GraphDatabase
 
 import config
+from src.llm import chat_client
 
 # --- The template library. Cypher is CONSTANT; only $params vary. -----------
 # Each entry: cypher + how to fill it (entity_slots / list_slot / value_slot).
@@ -207,7 +208,7 @@ def plan(question: str, templates: dict[str, dict] | None = None) -> dict:
         f"Query types:\n{_templates_doc(templates)}\n"
         'Reply ONLY JSON: {"query_type":"...","entities":["..."],"value":"..."}.'
     )
-    client = ollama.Client(host=config.OLLAMA_BASE_URL)
+    client = chat_client()
     resp = client.chat(
         model=config.ROUTER_MODEL,
         messages=[{"role": "system", "content": system},

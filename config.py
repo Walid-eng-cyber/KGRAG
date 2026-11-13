@@ -18,6 +18,17 @@ DATA_DIR.mkdir(exist_ok=True)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# --- Chat-model provider (src/llm.py) ---
+# "ollama" = local (default). "openai" = any OpenAI-compatible API, e.g. Moonshot's
+# Kimi K3.1 Pro: LLM_BASE_URL=https://api.moonshot.ai/v1, model id kimi-k3.1-pro.
+# Embeddings (EMBED_MODEL) always stay on Ollama.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.moonshot.ai/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_TIMEOUT_S = int(os.getenv("LLM_TIMEOUT_S", "180"))
+# Model used for graph extraction (ingest). Defaults to OLLAMA_MODEL for local runs.
+EXTRACT_MODEL = os.getenv("EXTRACT_MODEL", OLLAMA_MODEL)
+
 # Embedding model used for entity resolution (fuzzy duplicate detection).
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 # Cosine-similarity threshold above which two entity names are treated as the

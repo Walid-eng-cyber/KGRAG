@@ -29,7 +29,9 @@ def _postgres() -> dict:
 
 
 def _ollama() -> dict:
-    needed = {config.ROUTER_MODEL, config.ANSWER_MODEL, config.EMBED_MODEL}
+    # With a hosted chat provider, Ollama only has to serve the embedding model.
+    needed = {config.EMBED_MODEL} if config.LLM_PROVIDER != "ollama" else \
+        {config.ROUTER_MODEL, config.ANSWER_MODEL, config.EMBED_MODEL}
     try:
         import ollama
         listed = ollama.Client(host=config.OLLAMA_BASE_URL, timeout=2).list()
@@ -41,8 +43,17 @@ def _ollama() -> dict:
         return {"ok": False, "detail": type(e).__name__}
 
 
+def _hosted_llm() -> dict:
+    """Config check only — no paid call on every health poll."""
+    if not config.LLM_API_KEY:
+        return {"ok": False, "detail": "LLM_API_KEY is empty"}
+    return {"ok": True, "detail": f"{config.LLM_PROVIDER} @ {config.LLM_BASE_URL}"}
+
+
 def health() -> dict:
     services = {"neo4j": _neo4j(), "postgres": _postgres(), "ollama": _ollama()}
+    if config.LLM_PROVIDER != "ollama":
+        services["llm"] = _hosted_llm()
     return {"ok": all(s["ok"] for s in services.values()), "services": services,
             "models": {"router": config.ROUTER_MODEL, "answer": config.ANSWER_MODEL,
                        "embed": config.EMBED_MODEL}}

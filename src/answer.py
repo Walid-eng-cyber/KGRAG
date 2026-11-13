@@ -15,9 +15,8 @@ from __future__ import annotations
 import re
 from datetime import date
 
-import ollama
-
 import config
+from src.llm import chat_client
 from src.router import route
 from src.skills import skill_for
 from src.tools import run_tools, scan_patterns
@@ -367,7 +366,7 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
 
     # Generate, then validate every citation resolves to a retrieved source.
     # Reject and regenerate on invalid/missing citations (cheap: only on failure).
-    client = ollama.Client(host=config.OLLAMA_BASE_URL)
+    client = chat_client()
     text, invalid, uncited, attempts = "", [], [], 0
     for attempts in range(1, config.ANSWER_MAX_RETRIES + 2):
         text = client.chat(model=config.ANSWER_MODEL, messages=messages)["message"]["content"].strip()

@@ -20,6 +20,9 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-fable-5-1": (10.0, 50.0),
+    # Moonshot list prices (cache-miss input). Longer ids first: matching is by substring.
+    "kimi-k3.1-pro-highspeed": (4.0, 20.0),
+    "kimi-k3.1-pro": (2.0, 10.0),
 }
 
 

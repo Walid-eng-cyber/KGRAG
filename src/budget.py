@@ -44,10 +44,10 @@ def estimate(text: str, price_in: float = 0.0, price_out: float = 0.0) -> dict:
 
 
 def main(tickers: list[str]) -> None:
-    price_in, price_out = resolve_prices(config.OLLAMA_MODEL)
+    price_in, price_out = resolve_prices(config.EXTRACT_MODEL)
     priced = price_in or price_out
-    mode = (f"{config.OLLAMA_MODEL} @ ${price_in}/${price_out} per 1M"
-            if priced else f"local Ollama ({config.OLLAMA_MODEL}), $0")
+    mode = (f"{config.EXTRACT_MODEL} @ ${price_in}/${price_out} per 1M"
+            if priced else f"local Ollama ({config.EXTRACT_MODEL}), $0")
     print(f"Budget estimate — model: {mode}\n")
     print(f"{'ticker':<8}{'chunks':>7}{'in tok':>10}{'out tok':>9}"
           f"{'time':>8}{'cost':>9}  status")

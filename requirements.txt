@@ -1,6 +1,8 @@
 # Core RAG / graph framework
 llama-index-core>=0.12.0
 llama-index-llms-ollama>=0.5.0
+# Hosted OpenAI-compatible models for extraction (LLM_PROVIDER=openai, e.g. Kimi K3.1 Pro)
+llama-index-llms-openai-like>=0.3.0
 llama-index-graph-stores-neo4j>=0.4.0
 
 # Local LLM runtime is Ollama (installed separately from https://ollama.com).
