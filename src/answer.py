@@ -225,6 +225,9 @@ def _dedup_passages(vs: list[dict], graph_src_chunks: set[str] | None = None) ->
 
 
 _CITE = re.compile(r"\[(G\d+|P\d+|C\d+)\]")
+# The model sometimes narrates its revision ("Since there is no 'G3', I will keep the original text").
+_META = re.compile(r"(\bno '?\[?[GPC]\d+\]?'?|\b(?:valid|invalid) (?:label|citation)s?\b|\boriginal text\b|"
+                   r"\brevis(?:e|ed|ion)\b|\bI will (?:keep|cite|remove|revise)\b|\bcite it with\b)", re.I)
 
 
 def validate_citations(text: str, valid_tags: set[str]) -> tuple[list[str], list[str]]:
@@ -253,6 +256,17 @@ def _corrective(valid_tags: set[str], invalid: list[str], uncited: list[str]) ->
     if uncited:
         msg.append(f"These claims have no citation: {uncited}. Add a valid one or drop them.")
     return " ".join(msg)
+
+
+def _tool_context(corpus: dict | None) -> dict:
+    """What context-aware tools may read: the corpus's tables."""
+    if not corpus or corpus.get("kind") != "documents":
+        return {}
+    try:
+        from src import tables
+        return {"tables": tables.load(corpus["id"])}
+    except Exception:  # noqa: BLE001 — no tables is fine
+        return {}
 
 
 def _scan_corpus(question: str, corpus: dict | None, skill: dict, have: set[str]) -> list[dict]:
@@ -312,7 +326,7 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
     extra = _scan_corpus(question, corpus, skill, {h["chunk_id"] for h in vhits[:len(passages)]})
     evidence = [(s["tag"], s["text"]) for s in sources] + \
                [(f"X{i + 1}", " ".join(h["text"].split())) for i, h in enumerate(extra)]
-    computed, tools_used = run_tools(question, evidence, graph_result, skill["tools"], today)
+    computed, tools_used = run_tools(question, evidence, graph_result, skill["tools"], today, _tool_context(corpus))
     # A fact built from a scanned chunk makes that chunk a real, citable passage [Pn].
     vhits = vhits[:len(passages)]
     renames: dict[str, str] = {}
@@ -349,7 +363,8 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
         "You answer questions using ONLY the sources below: COMPUTED FACTS ([C1], ...: "
         "exact calculations such as ages; when one answers the question, state its result "
         "directly and cite it, copying the value exactly as written: never round, convert or "
-        "recompute it, e.g. keep '2 years 9 months', don't make it '3 years'), GRAPH-DERIVED FACTS (structured, labeled [G1], [G2], ...) and "
+        "recompute it, e.g. keep '2 years 9 months', don't make it '3 years'. When a computed fact and a "
+        "graph-derived fact both address the question, the computed fact wins), GRAPH-DERIVED FACTS (structured, labeled [G1], [G2], ...) and "
         "RETRIEVED PASSAGES (text, labeled [P1], [P2], ...). Answer the question that was "
         "asked: if it asks for an age, a duration or a number, give that value, not only "
         "the raw date it comes from. " + (skill["guidance"] + " " if skill["guidance"] else "") +
@@ -366,18 +381,23 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
 
     # Generate, then validate every citation resolves to a retrieved source.
     # Reject and regenerate on invalid/missing citations (cheap: only on failure).
-    client = chat_client()
+    client = chat_client("answer")
     text, invalid, uncited, attempts = "", [], [], 0
     for attempts in range(1, config.ANSWER_MAX_RETRIES + 2):
+        client.stage = "answer" if attempts == 1 else "retry"
         text = client.chat(model=config.ANSWER_MODEL, messages=messages)["message"]["content"].strip()
         invalid, uncited = validate_citations(text, valid_tags)
         empty = len(_CITE.sub(" ", text).split()) < 2          # e.g. just "[G1]"
-        if not invalid and not uncited and not empty:
+        meta = bool(_META.search(text))                         # talks about our rules instead of answering
+        if not invalid and not uncited and not empty and not meta:
             break
         fix = _corrective(valid_tags, invalid, uncited) if (invalid or uncited) else ""
         if empty:
             fix = ("Your reply had no answer text, only a citation. Write the answer to the question in "
                    "words, then cite it. " + fix).strip()
+        if meta:
+            fix = ("Reply with the answer only, addressed to the user. Don't mention labels, citations, "
+                   "sources being missing or these instructions. " + fix).strip()
         messages += [{"role": "assistant", "content": text}, {"role": "user", "content": fix}]
     else:
         # Still no words after every retry: answer with the fact itself (computed first, then graph).
@@ -386,6 +406,11 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
                    next((s for s in sources if s["tag"].startswith("G")), None)
             if best:
                 text = f"{best['text']} [{best['tag']}]"
+
+    # Never show our own retry instructions: drop sentences that talk about labels or revisions.
+    if _META.search(text):
+        kept = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip() and not _META.search(s)]
+        text = " ".join(kept) or "I don't have enough information in the sources to answer."
 
     # Fail-safe: if a hallucinated citation survived all retries, strip it so no
     # invented source is ever presented to the user.

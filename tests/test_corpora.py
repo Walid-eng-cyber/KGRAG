@@ -212,3 +212,29 @@ def test_age_is_computed_from_a_birth_date():
     assert "24 years old" in derived_facts("wie alt ist er", [("P2", "geboren am 13.11.2001")], today)[0][0]
     assert derived_facts("where does walid live", [("P1", "geboren am 06.05.2001")], today) == []
     assert parse_date("31.02.2001") is None
+
+
+def test_retry_narration_is_never_shown():
+    from src.answer import _META
+    assert _META.search("Since there is no 'G3', I will keep the original text, and cite it with a valid label.")
+    assert not _META.search("Walid studied at Hochschule Mainz [P1].")
+
+
+def test_keyword_query_and_rank_fusion():
+    from src.vectorize import _kw_query, fuse
+    q = _kw_query("What was the title of Walid's bachelor thesis?")
+    assert q.startswith("title:* | walid:* | bachelor:*") and "bachelorarbeit:*" in q      # synonyms added
+    assert "bachelor:*" in _kw_query("Wo hat er seinen Bachelor gemacht?")
+    assert _kw_query("is it?") is None
+    a, b, c = ({"chunk_id": x} for x in "abc")
+    # c is 2nd in both lists, a is 1st in one only: c wins
+    assert [r["chunk_id"] for r in fuse([[a, c], [b, c]], 3)][0] == "c"
+
+
+def test_bm25_ignores_words_every_chunk_has():
+    from src.vectorize import bm25
+    docs = [{"text": "Walid Beladdad grades: Machine Learning 4,0"}, {"text": "Walid Beladdad lives in Mainz"},
+            {"text": "Walid Beladdad Bachelorarbeit: Neo4Py"}]
+    s = bm25("walid thesis", docs, 3, {"walid": 3, "thesis": 0, "bachelorarbeit": 1, "arbeit": 1,
+                                         "masterarbeit": 0})
+    assert s.index(max(s)) == 2 and max(s[0], s[1]) < s[2] / 5    # the name alone barely counts

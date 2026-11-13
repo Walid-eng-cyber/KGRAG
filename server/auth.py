@@ -78,7 +78,8 @@ def _serializer() -> URLSafeTimedSerializer:
 def public(user: dict) -> dict:
     """What the browser may see about an account."""
     return {"email": user["email"], "name": user["name"], "picture": user.get("picture"),
-            "role": user["role"], "status": user["status"], "updates_opt_in": bool(user["updates_opt_in"])}
+            "role": user["role"], "status": user["status"], "updates_opt_in": bool(user["updates_opt_in"]),
+            "account_id": user.get("account_id")}
 
 
 def verify_google_token(credential: str) -> dict:
@@ -179,6 +180,16 @@ def require_admin(request: Request) -> dict:
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admins only.")
     return user
+
+
+def require_operator(request: Request) -> dict | None:
+    """FastAPI dependency for the operator's client-usage views: admins when sign-in is on.
+
+    With sign-in off (a local, single-user setup where every route is already open) the
+    operator is whoever runs the server, so the views are open too."""
+    if not settings.enabled:
+        return None
+    return require_admin(request)
 
 
 # ---- rate limit: sliding 60 s window per user (or per client IP when auth is off) ----

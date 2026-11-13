@@ -32,8 +32,9 @@ from server.health import health
 from server.security import SecurityHeaders, check_public_config, cors_origins, docs_enabled
 from server.corpora import CorpusStore
 from server.doc_store import DocumentStore, IngestWorker
+from server.usage import UsageStore
 from server.users import CONSENT_TEXT
-from src import corpus_graph, corpus_schema
+from src import corpus_graph, corpus_schema, meter
 from src import documents as docs
 
 DEMO = os.getenv("KGRAG_DEMO", "").lower() in {"1", "true", "yes"}
@@ -102,6 +103,23 @@ class StatusBody(BaseModel):
     status: Literal["approved", "rejected", "disabled", "pending"]
 
 
+class AccountBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    industry: str = Field(default="", max_length=80)
+    monthly_credit_eur: float | None = Field(default=None, ge=0, le=1_000_000)  # None = the default credit
+
+
+class AccountPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    industry: str | None = Field(default=None, max_length=80)
+    monthly_credit_eur: float | None = Field(default=None, ge=0, le=1_000_000)
+    status: Literal["active", "suspended"] | None = None
+
+
+class MemberBody(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
 def _path_key(path_used: str | None) -> str:
     return (path_used or "NONE").split(" ")[0].upper()
 
@@ -152,7 +170,8 @@ def meta() -> dict:
             "auth": {"enabled": auth.settings.enabled, "client_id": auth.settings.client_id or None,
                      "consent_text": CONSENT_TEXT},
             "models": {"router": config.ROUTER_MODEL, "answer": config.ANSWER_MODEL,
-                       "embed": config.EMBED_MODEL}}
+                       "embed": config.EMBED_MODEL},
+            "billing": {"currency": config.BILLING_CURRENCY, "priced_as": config.BILLING_PRICE_AS or None}}
 
 
 @app.post("/api/auth/signup")
@@ -214,6 +233,63 @@ def admin_users(status: str | None = None, _: dict = Depends(auth.require_admin)
                        "decided_by": u["decided_by"]} for u in users]}
 
 
+@app.get("/api/admin/accounts")
+def admin_accounts(_: dict = Depends(auth.require_operator)) -> dict:
+    """Every client account: this month's spend against budget, and the last 7 days of activity."""
+    from server.usage import billing
+    return {"accounts": usage_store.overview(auth.settings.store.list_accounts()), "billing": billing()}
+
+
+@app.post("/api/admin/accounts")
+def admin_create_account(body: AccountBody, _: dict = Depends(auth.require_operator)) -> dict:
+    return {"account": auth.settings.store.create_account(body.name, body.industry, body.monthly_credit_eur)}
+
+
+def _account_or_404(account_id: str) -> dict:
+    a = auth.settings.store.get_account(account_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="No such account.")
+    return a
+
+
+@app.patch("/api/admin/accounts/{account_id}")
+def admin_update_account(account_id: str, body: AccountPatch, _: dict = Depends(auth.require_operator)) -> dict:
+    _account_or_404(account_id)
+    return {"account": auth.settings.store.update_account(account_id, **body.model_dump())}
+
+
+@app.get("/api/admin/accounts/{account_id}/usage")
+def admin_account_usage(account_id: str, days: int = 30, _: dict = Depends(auth.require_operator)) -> dict:
+    if not 1 <= days <= 366:
+        raise HTTPException(status_code=422, detail="days must be between 1 and 366.")
+    return usage_store.report(_account_or_404(account_id), days)
+
+
+@app.get("/api/admin/accounts/{account_id}/members")
+def admin_account_members(account_id: str, _: dict = Depends(auth.require_operator)) -> dict:
+    _account_or_404(account_id)
+    return {"members": [auth.public(u) for u in auth.settings.store.members(account_id)]}
+
+
+@app.post("/api/admin/accounts/{account_id}/members")
+def admin_add_member(account_id: str, body: MemberBody, _: dict = Depends(auth.require_operator)) -> dict:
+    _account_or_404(account_id)
+    user = auth.settings.store.set_account(body.email, account_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="No user with that email. They need to sign up first.")
+    return {"user": auth.public(user)}
+
+
+@app.delete("/api/admin/accounts/{account_id}/members/{email}")
+def admin_remove_member(account_id: str, email: str, _: dict = Depends(auth.require_operator)) -> dict:
+    _account_or_404(account_id)
+    u = auth.settings.store.get(email)
+    if u is None or u.get("account_id") != account_id:
+        raise HTTPException(status_code=404, detail="That user isn't in this account.")
+    auth.settings.store.set_account(email, None)
+    return {"ok": True}
+
+
 @app.post("/api/admin/users/{email}/status")
 def admin_set_status(email: str, body: StatusBody, admin: dict = Depends(auth.require_admin)) -> dict:
     if email.lower() == admin["email"]:
@@ -246,15 +322,45 @@ def ask(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> dict
         # With accounts on, every question must name one of the asker's corpora:
         # the unscoped legacy graph could otherwise reach other users' entities.
         raise HTTPException(status_code=400, detail="Choose a corpus to ask in.")
-    try:
-        from src.answer import answer
-        raw = answer(req.question.strip(), corpus)
-    except Exception as e:  # noqa: BLE001 - log the details, show the user a generic message
-        log.exception("answer() failed")
-        raise HTTPException(status_code=503,
-                            detail="KGRAG couldn't answer right now: a backend service (Neo4j, Postgres or Ollama) "
-                                   "isn't available. The details are in the server log.") from e
+    with meter.meter() as m:
+        try:
+            from src.answer import answer
+            raw = answer(req.question.strip(), corpus)
+        except Exception as e:  # noqa: BLE001 - log the details, show the user a generic message
+            log.exception("answer() failed")
+            _record_ask(user, req.corpus_id, m, None, perf_counter() - t0)
+            raise HTTPException(status_code=503,
+                                detail="KGRAG couldn't answer right now: a backend service (Neo4j, Postgres or "
+                                       "Ollama) isn't available. The details are in the server log.") from e
+    _record_ask(user, req.corpus_id, m, raw, perf_counter() - t0)
     return shape_answer(raw, perf_counter() - t0)
+
+
+def _account_of(email: str | None) -> str | None:
+    if not email or not auth.settings.enabled:
+        return None
+    u = auth.settings.store.get(email)
+    return u.get("account_id") if u else None
+
+
+def _record_ask(user: dict | None, corpus_id: str | None, m: meter.Meter, raw: dict | None, latency_s: float) -> None:
+    """One usage row per question: measurements only, never the question or answer text."""
+    if raw is None:
+        outcome = "error"
+    elif not raw.get("sources"):
+        outcome = "no_evidence"
+    else:
+        outcome = "answered"
+    path = _path_key(raw.get("path_used")) if raw else None
+    usage_store.record(
+        kind="ask", outcome=outcome, account_id=user.get("account_id") if user else None,
+        user_email=_owner(user), corpus_id=corpus_id, path=path,
+        low_confidence=bool(raw and "low-confidence" in (raw.get("path_used") or "")),
+        retried=bool(raw and raw.get("attempts", 1) > 1),
+        citation_ok=None if raw is None else bool(raw.get("citations_valid", True)),
+        requests=m.requests, tokens_in=m.tokens_in, tokens_out=m.tokens_out, cost_usd=m.cost_usd,
+        cost_eur=m.cost_eur, priced_as=m.priced_as, estimated=m.estimated, latency_ms=latency_s * 1000,
+        stages=m.stages())
 
 
 @app.get("/api/benchmark", dependencies=[Depends(auth.require_user)])
@@ -269,6 +375,7 @@ def get_benchmark() -> dict:
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 _DB = os.getenv("DOCUMENTS_DB", str(config.DATA_DIR / "documents.db"))
 corpus_store = CorpusStore(_DB)
+usage_store = UsageStore()
 doc_store = DocumentStore(_DB, os.getenv("UPLOAD_DIR", str(config.DATA_DIR / "uploads")))
 
 
@@ -276,7 +383,31 @@ def _ingest(doc: dict, text: str, progress) -> dict:
     corpus = corpus_store.get(doc["corpus_id"]) if doc.get("corpus_id") else None
     if corpus is None:
         raise ValueError("This document isn't in a corpus. Move it into one, then ingest again.")
-    return corpus_graph.ingest_text(corpus, doc["id"], doc["title"], text, progress)
+    t0 = perf_counter()
+    with meter.meter() as m:
+        try:
+            out = corpus_graph.ingest_text(corpus, doc["id"], doc["title"], text, progress)
+        except Exception:
+            _record_ingest(doc, m, None, text, perf_counter() - t0)
+            raise
+    _record_ingest(doc, m, out, text, perf_counter() - t0)
+    return out
+
+
+def _record_ingest(doc: dict, m: meter.Meter, out: dict | None, text: str, latency_s: float) -> None:
+    """Extraction runs through LlamaIndex, which doesn't hand back token counts: estimate them
+    from the text the same way src/budget.py does before a run, and mark the row as estimated."""
+    from src.budget import estimate
+    if out is not None:
+        est = estimate(text[: config.MAX_FILING_CHARS])
+        m.calls.append(meter.LLMCall("extract", config.EXTRACT_MODEL, est["input_tokens"],
+                                     est["output_tokens"], latency_s * 1000, estimated=True))
+    usage_store.record(
+        kind="ingest", outcome="ok" if out is not None else "failed", account_id=_account_of(doc.get("owner")),
+        user_email=doc.get("owner"), corpus_id=doc.get("corpus_id"), requests=m.requests, tokens_in=m.tokens_in,
+        tokens_out=m.tokens_out, cost_usd=m.cost_usd, cost_eur=m.cost_eur, priced_as=m.priced_as,
+        estimated=m.estimated, latency_ms=latency_s * 1000,
+        units=(out or {}).get("chunks"), stages=m.stages())
 
 
 ingest_worker = IngestWorker(doc_store, docs.extract_text, _ingest)

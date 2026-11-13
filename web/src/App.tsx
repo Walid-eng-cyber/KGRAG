@@ -6,10 +6,14 @@ import { AskPage } from "./pages/AskPage";
 import { AdminPage } from "./pages/AdminPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { LoginPage } from "./pages/LoginPage";
+import { UsagePage } from "./pages/UsagePage";
 import type { Corpus, CorpusProfile, Health, Meta, Preset, User } from "./types";
 
-const pageFromHash = (): Page =>
-  window.location.hash === "#/benchmark" ? "benchmark" : window.location.hash === "#/admin" ? "admin" : "ask";
+const pageFromHash = (): Page => {
+  const h = window.location.hash;
+  return h === "#/benchmark" ? "benchmark" : h === "#/admin" ? "admin"
+    : h === "#/usage" || h.startsWith("#/usage/") ? "usage" : "ask";
+};
 
 type Session = "loading" | "signed-out" | "ready";
 const CORPUS_KEY = "kgrag.corpus";
@@ -122,12 +126,17 @@ export default function App() {
           <div className="crumb">
             {page === "ask" ? <>{corpus ? corpus.name : "Ask"} <b>/ grounded answer</b></>
               : page === "admin" ? <>Accounts <b>/ sign-ups and access</b></>
+              : page === "usage" ? <>Clients <b>/ usage, cost and credit per account</b></>
               : <>Benchmark <b>/ GraphRAG vs plain vector RAG</b></>}
           </div>
           {meta?.demo ? <span className="pill demo">Demo mode · sample data</span>
-            : <span className="pill local">All models on-device · $0 per query</span>}
+            : meta?.billing?.priced_as
+              ? <span className="pill local" title="Models run on-device; usage is priced as if a hosted provider answered">
+                  On-device · priced as {meta.billing.priced_as}</span>
+              : <span className="pill local">All models on-device · $0 per query</span>}
         </div>
-        {page === "admin" && user?.role === "admin" ? <AdminPage me={user} />
+        {page === "usage" && (user?.role === "admin" || (meta && !meta.auth.enabled)) ? <UsagePage />
+          : page === "admin" && user?.role === "admin" ? <AdminPage me={user} />
           : page === "benchmark" ? <BenchmarkPage />
           : <AskPage key={corpus?.id ?? "none"} meta={meta} corpus={corpus} profile={profile} onNewCorpus={() => setDialog("new")} />}
       </main>

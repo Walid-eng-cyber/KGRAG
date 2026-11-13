@@ -49,13 +49,55 @@ class OpenAICompatClient:
             if not r.ok:
                 raise RuntimeError(f"{model} via {self.url}: HTTP {r.status_code} {r.text[:300]}")
             break
-        msg = r.json()["choices"][0]["message"]
-        return {"message": {"role": "assistant", "content": msg.get("content") or ""}}
+        payload = r.json()
+        msg = payload["choices"][0]["message"]
+        usage = payload.get("usage") or {}
+        # Same field names Ollama uses, so the meter reads both backends one way.
+        return {"message": {"role": "assistant", "content": msg.get("content") or ""},
+                "prompt_eval_count": usage.get("prompt_tokens"),
+                "eval_count": usage.get("completion_tokens")}
 
 
-def chat_client():
-    """A client with Ollama's `.chat(model=, messages=, format=)` interface."""
+def _field(resp, key: str):
+    try:
+        return resp[key]          # dict, or Ollama's subscriptable response model
+    except (KeyError, TypeError, AttributeError):
+        return getattr(resp, key, None)
+
+
+class MeteredClient:
+    """Wraps any chat client and reports each call's tokens and duration to the
+    request's meter (src/meter.py). `stage` names the step for cost breakdowns;
+    a caller may change it between calls (e.g. "answer" then "retry")."""
+
+    def __init__(self, inner, stage: str):
+        self.inner = inner
+        self.stage = stage
+
+    def chat(self, model: str, messages: list[dict], **kw):
+        from src import meter
+        t0 = time.perf_counter()
+        resp = self.inner.chat(model=model, messages=messages, **kw)
+        ms = (time.perf_counter() - t0) * 1000
+        tin, tout = _field(resp, "prompt_eval_count"), _field(resp, "eval_count")
+        estimated = tin is None or tout is None
+        if estimated:  # backend didn't say: estimate from characters rather than record zero
+            content = (_field(resp, "message") or {})
+            content = _field(content, "content") or ""
+            tin = meter.estimate_tokens("".join(str(m.get("content", "")) for m in messages))
+            tout = meter.estimate_tokens(content)
+        meter.record(self.stage, model, tin, tout, ms, estimated)
+        return resp
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def chat_client(stage: str = "other"):
+    """A client with Ollama's `.chat(model=, messages=, format=)` interface, metered."""
     if is_hosted():
-        return OpenAICompatClient(config.LLM_BASE_URL, config.LLM_API_KEY, float(config.LLM_TIMEOUT_S))
-    import ollama
-    return ollama.Client(host=config.OLLAMA_BASE_URL)
+        inner = OpenAICompatClient(config.LLM_BASE_URL, config.LLM_API_KEY, float(config.LLM_TIMEOUT_S))
+    else:
+        import ollama
+        inner = ollama.Client(host=config.OLLAMA_BASE_URL)
+    return MeteredClient(inner, stage)

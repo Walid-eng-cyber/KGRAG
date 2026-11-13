@@ -116,8 +116,10 @@ def _label(before: str) -> str:
     """The title a period belongs to: the text right before it, trimmed to the last ~2 lines' worth."""
     t = re.sub(r"\s+", " ", before).strip(" |,;:–-●•")
     t = re.split(r"[●•]|(?<=[a-zäöüß]{3})\.\s", t)[-1]      # a sentence end, not "B.Sc. " or "Std./Woche"
-    if len(t) > 90:
-        t = t[-90:].split(" ", 1)[-1]          # start at a whole word
+    t = re.split(r"\b[A-ZÄÖÜ]{5,}\b(?:\s+[A-ZÄÖÜ]{3,}\b)*", t)[-1]   # a section heading (BERUFSERFAHRUNG)
+    t = re.split(r"\b[A-Z][\w]+:\s(?=[^|]*\|)", t)[-1] if "|" in t else t   # "Technologien: A | B" lists
+    if len(t) > 160:
+        t = t[-160:].split(" ", 1)[-1]         # start at a whole word
     return t.lstrip(" |,;:–-").strip()
 
 
@@ -159,32 +161,53 @@ def _fmt(p: Period) -> str:
 
 
 # Words that tie a question to a period's label.
-_EXPAND = {
-    "study": "studium studied studies student university universität hochschule b.sc m.sc bachelor master degree",
-    "studied": "studium university hochschule b.sc m.sc bachelor master",
-    "bachelor": "b.sc bsc licence", "master": "m.sc msc",
-    "work": "praktikum werkstudent mitarbeiter intern internship job arbeit entwickler developer engineer employee",
-    "worked": "praktikum werkstudent mitarbeiter intern internship job entwickler developer",
-    "intern": "praktikum internship", "internship": "praktikum", "praktikum": "internship intern",
-    "project": "projekt github", "projekt": "project github",
+# SYNONYMS name the same thing in other words or languages: as strong as a literal match.
+# RELATED words only hint at it ("study" -> "university"): weak, so they decide only ties.
+SYNONYMS = {
+    "master": "m.sc msc mba masterstudium", "bachelor": "b.sc bsc licence licenciatura bachelorstudium",
+    "phd": "doktor promotion ph.d doctorate", "doctorate": "phd ph.d promotion",
+    "internship": "praktikum intern stage", "intern": "praktikum internship", "praktikum": "internship intern",
+    "project": "projekt projet", "projekt": "project", "thesis": "arbeit bachelorarbeit masterarbeit",
+    "job": "stelle", "company": "firma unternehmen", "school": "schule",
 }
-_STOP = set("how long did does was were the and for with what when which many years months days walid his her their "
-            "has have had take took last lasted wie lange hat war ist der die das ein eine sein ihre".split())
+RELATED = {
+    "study": "studium studied studies student university universität hochschule college b.sc m.sc degree",
+    "studying": "studium student university universität hochschule college b.sc m.sc degree",
+    "studied": "studium university universität hochschule college b.sc m.sc",
+    "degree": "b.sc m.sc bachelor master diplom abschluss",
+    "work": "praktikum werkstudent mitarbeiter intern internship job arbeit entwickler developer engineer employee",
+    "worked": "praktikum werkstudent mitarbeiter intern internship job entwickler developer engineer",
+    "working": "praktikum werkstudent mitarbeiter intern internship job entwickler developer engineer",
+    "project": "github", "projekt": "github",
+}
+_STOP = set(("how long did does was were the and for with what when which many years months days his her their "
+            "has have had take took last lasted wie lange hat war ist der die das ein eine sein ihre "
+            "combien temps est son").split())
 
 
 def _words(s: str) -> set[str]:
-    return {w.strip(".") for w in re.findall(r"[\w.]+", s.lower()) if len(w.strip(".")) >= 3 and w not in _STOP}
+    out = set()
+    for w in re.findall(r"[\w.]+", s.lower()):
+        w = w.strip(".")
+        w = re.sub(r"(?<=\w{3})'?s$", "", w) if w.endswith("'s") else w
+        if len(w) >= 3 and w not in _STOP:
+            out.add(w)
+    return out
+
+
+_ONGOING_Q = re.compile(r"\b(?:has|have)\s+(?:\w+\s+)?been\b|\bseit\b|\bschon\b|\bstill\b|\bso far\b|\bdepuis\b", re.I)
 
 
 def _score(question: str, p: Period) -> int:
-    """Each question word counts once: 3 if it is in the label itself (or inside a longer word there),
-    1 if only one of its expansions is (study -> university)."""
-    label, after, score = _words(p.label), _words(p.after), 0
+    """Each question word counts once: 3 for a literal or synonym match in the label,
+    1 for a related word in the label or a literal match in the text after the period."""
+    label, after = _words(p.label), _words(p.after)
+    score = 2 if p.ongoing and _ONGOING_Q.search(question) else 0
     hit = lambda w, words: any(w == x or (len(w) >= 5 and (w in x or x in w)) for x in words)  # noqa: E731
     for w in _words(question):
-        if hit(w, label):
+        if hit(w, label) or label & set(SYNONYMS.get(w, "").split()):
             score += 3
-        elif label & set(_EXPAND.get(w, "").split()):
+        elif label & set(RELATED.get(w, "").split()):
             score += 1
         elif hit(w, after):
             score += 1
@@ -230,6 +253,8 @@ _CURRENT = re.compile(r"\b(current(ly)?|now|today|at the moment|presently|aktuel
                       r"gerade|actuel\w*|en ce moment)\b", re.I)
 _LATEST = re.compile(r"\b(latest|most recent|last|newest|zuletzt|letzte\w*|neueste\w*|dernier\w*)\b", re.I)
 _FIRST = re.compile(r"\b(first|earliest|oldest|zuerst|erste\w*|früheste\w*|premier\w*)\b", re.I)
+_NEXT = re.compile(r"\b(next|upcoming|future|planned|will (?:start|begin|join)|going to|about to|zukünftig\w*|"
+                   r"künftig\w*|nächste\w*|geplant\w*|demnächst|bald|prochain\w*|futur\w*)\b", re.I)
 _JOBQ = re.compile(r"\b(job|work\w*|employ\w*|position|role|arbeit\w*|stelle|beruf\w*|travail\w*|poste)\b", re.I)
 
 
@@ -237,38 +262,49 @@ def _item(p: Period) -> str:
     return f"{p.label} — {_fmt(p)}{' (planned)' if p.planned else ''} [{p.tag}]"
 
 
+def _narrow(question: str, cands: list[Period]) -> list[Period]:
+    """Keep the periods of the kind the question names ("first internship", "latest project")."""
+    scores = [_score(question, p) for p in cands]
+    if scores and max(scores) > 0:
+        return [p for p, s in zip(cands, scores) if s == max(scores)]
+    return cands
+
+
 def timeline(question, evidence, graph, today):
     ps = sorted(all_periods(evidence, today), key=lambda p: (p.start, p.end))
     if _JOBQ.search(question):            # "current job" is about work, not the degree in progress
         ps = [p for p in ps if _WORK.search(p.label)] or ps
-    # "first internship", "latest project": keep the periods of the kind the question names.
-    scores = [_score(question, p) for p in ps]
-    if scores and max(scores) > 0:
-        ps = [p for p, s in zip(ps, scores) if s == max(scores)]
     if not ps:
         return []
     past = [p for p in ps if not p.planned]
     out = []
+    if _NEXT.search(question):
+        plans = _narrow(question, sorted((p for p in ps if p.planned), key=lambda p: p.start))
+        out.append(("Next, planned and not started yet: " + "; ".join(map(_item, plans)) + "." if plans else
+                    "Nothing in these documents is planned for the future (no period starts after today).",
+                    (plans or ps)[0].tag))
     if _CURRENT.search(question):
-        now = [p for p in ps if p.ongoing]
+        now = _narrow(question, [p for p in ps if p.ongoing])
         out.append((f"As of today, {today:%d %B %Y}, ongoing: " + ("; ".join(map(_item, now)) if now else
                     "nothing in these documents is marked as ongoing") + ".", (now or ps)[0].tag))
         plans = [p for p in ps if p.planned]
-        if plans:
+        if plans and not _NEXT.search(question):
             out.append(("Planned, not started yet: " + "; ".join(map(_item, plans)) + ".", plans[0].tag))
     if _LATEST.search(question) and past:
-        p = max(past, key=lambda p: (p.start, p.end))
+        p = max(_narrow(question, past), key=lambda p: (p.start, p.end))
         out.append((f"The most recently started: {_item(p)}.", p.tag))
     if _FIRST.search(question) and past:
-        p = past[0]
+        p = min(_narrow(question, past), key=lambda p: (p.start, p.end))
         out.append((f"The earliest: {_item(p)}.", p.tag))
     if not out and len(ps) >= 2:
+        ps = _narrow(question, ps)
         out.append(("In chronological order: " + "; ".join(f"{i + 1}) {_item(p)}" for i, p in enumerate(ps)) + ".",
                     ps[0].tag))
     return out
 
 
 _WORK = re.compile(r"praktikum|werkstudent|mitarbeiter|intern|job|entwickler|developer|engineer|employee|"
+                   r"hilfskraft|assistant|assistent|researcher|manager|lead|"
                    r"consultant|analyst|berater|angestellt|stelle|position|work", re.I)
 
 
@@ -289,3 +325,27 @@ def experience(question, evidence, graph, today):
     return [(f"Work periods found: {listed}. Together, without double-counting overlaps, that is "
              f"{y} year{'s' * (y != 1)} {rem} month{'s' * (rem != 1)} ({days} days) of work experience "
              f"as of {today:%d %B %Y}.", ps[0].tag)]
+
+
+_YEAR_Q = re.compile(r"\b(?:in|during|im|en|seit|since|bis|until|before|after|vor|nach|von)\s+((?:19|20)\d{2})\b", re.I)
+
+
+def in_year(question, evidence, graph, today):
+    """What a person was doing in a given year: the periods that overlap it, or that none do."""
+    years = sorted({int(y) for y in _YEAR_Q.findall(question)})
+    if not years:
+        return []
+    ps = all_periods(evidence, today)
+    if not ps:
+        return []
+    out = []
+    for y in years:
+        hits = [p for p in ps if p.start.year <= y <= p.end.year and not p.planned]
+        if hits:
+            out.append((f"Periods in these documents that overlap {y}: " + "; ".join(map(_item, hits)) + ".", hits[0].tag))
+        else:
+            first = min(ps, key=lambda p: p.start)
+            out.append((f"No dated period in these documents overlaps {y}: the earliest starts "
+                        f"{first.start:%d %b %Y} ({first.label}) [{first.tag}]. So there is no record of {y}.",
+                        first.tag))
+    return out

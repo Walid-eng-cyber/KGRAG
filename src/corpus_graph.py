@@ -109,10 +109,23 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
 
     schema = corpus["schema"]
     text = text[: config.MAX_FILING_CHARS]
+    from llama_index.core.schema import TextNode
+
+    from src.chunking import chunk_texts, strip_boilerplate
     doc = Document(doc_id=doc_id, text=text, metadata={"title": title})
-    chunks = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP,
-                              id_func=_chunk_id).get_nodes_from_documents([doc])
+    # Cut where the layout changes (sections, entries), not every N tokens; pieces that are still
+    # too long for the extractor go through the sentence splitter.
+    splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    pieces = []
+    for part in chunk_texts(strip_boilerplate(text)):
+        pieces += splitter.split_text(part) if len(part) > CHUNK_SIZE * 4 else [part]
+    chunks = [TextNode(id_=_chunk_id(i, doc), text=t, metadata={"title": title}) for i, t in enumerate(pieces)]
     hint = extraction_hint(schema, corpus["name"], corpus.get("description", ""))
+    # Layout chunks are short: a project's chunk doesn't repeat the person's name at the top of the CV.
+    # Tell the extractor which document (and whose) each chunk comes from; the stored text stays as is.
+    first_line = next((l.strip() for l in text.splitlines() if l.strip()), "")[:100]
+    hint += (f"\nThis passage is part of the document “{title}”, which begins with: “{first_line}”. "
+             "Facts in it are about that document's subject unless the passage names someone else.")
     total = len(chunks)
     eta = max(1, round(total * config.SECONDS_PER_CHUNK / 60))
     progress(f"Extracting graph: 0/{total} chunks (about {eta} min)", 0.0)
@@ -150,7 +163,10 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
     resolve_corpus(corpus["id"], schema)
     progress("Embedding chunks for vector search", 0.9)
     embed_chunks(corpus["id"], doc_id, title, [(c.node_id, c.text) for c in chunks])
-    return {"chunks": total, "entities": entities, "relations": relations}
+    progress("Reading tables", 0.96)
+    from src import tables
+    n_tables = tables.ingest(corpus["id"], doc_id, title, text)
+    return {"chunks": total, "entities": entities, "relations": relations, "tables": n_tables}
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +233,8 @@ def remove_document(corpus_id: str, doc_id: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    from src import tables
+    tables.delete(corpus_id, doc_id)
 
 
 def remove_corpus(corpus_id: str) -> None:
@@ -236,6 +254,8 @@ def remove_corpus(corpus_id: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    from src import tables
+    tables.delete(corpus_id)
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +434,7 @@ def plan(question: str, schema: dict) -> dict:
               f"ENTITY TYPES: {', '.join(schema['entities'])}\n"
               f"RELATIONS: {', '.join(sorted({r[1] for r in schema['relations']}))}\n"
               'Reply ONLY JSON: {"query_type":"...","entities":["..."],"value":"..."}.')
-    client = chat_client()
+    client = chat_client("graph_plan")
     resp = client.chat(model=config.ROUTER_MODEL, format="json",
                        messages=[{"role": "system", "content": system}, {"role": "user", "content": question}])
     return json.loads(resp["message"]["content"])
@@ -474,11 +494,18 @@ def run_query(question: str, corpus: dict) -> dict:
         with d.session() as s:
             if "entity_slots" in tmpl:
                 resolved = [r for r in (_resolve(s, corpus["id"], str(x)) for x in (p.get("entities") or [])) if r]
+                resolved = list(dict.fromkeys(resolved))
                 if len(resolved) < len(tmpl["entity_slots"]):
                     return {"source": "corpus", "query_type": qtype, "cypher": None, "rows": [],
                             "error": f"could not resolve {p.get('entities')} in this corpus"}
                 params.update(dict(zip(tmpl["entity_slots"], resolved)))
             rows = [dict(r) for r in s.run(tmpl["cypher"], **params)][:50]
+            if qtype == "entities_linked_of_type" and len(resolved) > 1:
+                # "Walid's projects that used Docker": keep the items linked to every named entity
+                for other in resolved[1:]:
+                    linked = {r["name"] for r in s.run(tmpl["cypher"], **{**params, "name": other})}
+                    rows = [r for r in rows if r["name"] in linked]
+                params["also_linked_to"] = resolved[1:]
         shown = {k: v for k, v in params.items() if k != "corpus"}
         return {"source": "corpus", "query_type": qtype, "cypher": tmpl["cypher"], "params": shown, "rows": rows}
     except Exception as e:  # noqa: BLE001
@@ -503,8 +530,10 @@ def verbalize(g: dict) -> list[str] | None:
             return []
         kind = params.get("type", "").lower().replace("_", " ")
         names = "; ".join(r["name"] for r in rows)
-        return [f"{rows[0]['entity']} is linked to exactly {len(rows)} {kind} entit{'y' if len(rows) == 1 else 'ies'} "
-                f"in this corpus: {names}."]
+        also = params.get("also_linked_to") or []
+        both = f" that are also linked to {' and '.join(also)}" if also else ""
+        return [f"{rows[0]['entity']} is linked to exactly {len(rows)} {kind} entit{'y' if len(rows) == 1 else 'ies'}"
+                f"{both} in this corpus: {names}."]
     if qt == "entities_of_type":
         return [f"The {params.get('type', '').lower().replace('_', ' ')} entities in this corpus are: "
                 f"{', '.join(r['name'] for r in rows)}."] if rows else []

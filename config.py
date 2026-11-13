@@ -72,6 +72,17 @@ PRICE_PER_1M_INPUT = float(os.getenv("PRICE_PER_1M_INPUT", "0.0"))
 PRICE_PER_1M_OUTPUT = float(os.getenv("PRICE_PER_1M_OUTPUT", "0.0"))
 # Hard ceiling: budget.py refuses to green-light a run estimated above this.
 BUDGET_LIMIT_USD = float(os.getenv("BUDGET_LIMIT_USD", "10.0"))
+
+# --- Client billing (server/usage.py) ---
+# Every LLM call is priced as if it ran on this hosted model, whatever actually ran it
+# (local Ollama included), so usage shows what an external provider would cost.
+# Empty = price each call at its own model's rate (local models then cost 0).
+BILLING_PRICE_AS = os.getenv("BILLING_PRICE_AS", "claude-sonnet-5-5").strip()
+# Provider list prices are in USD; client credit and reports are in EUR.
+BILLING_CURRENCY = "EUR"
+USD_TO_EUR = float(os.getenv("USD_TO_EUR", "0.86"))
+# Usage credit each new client account gets per calendar month.
+DEFAULT_MONTHLY_CREDIT_EUR = float(os.getenv("DEFAULT_MONTHLY_CREDIT_EUR", "2500"))
 # Measured wall-clock per chunk on this machine (for the local time estimate).
 SECONDS_PER_CHUNK = float(os.getenv("SECONDS_PER_CHUNK", "20.0"))
 EXTRACTION_TIMEOUT_S = int(os.getenv("EXTRACTION_TIMEOUT_S", "240"))  # per model call while extracting

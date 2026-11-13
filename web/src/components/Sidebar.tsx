@@ -1,9 +1,9 @@
 import type { Corpus, Health, Meta, User } from "../types";
 import { DocumentsPanel } from "./DocumentsPanel";
 
-export type Page = "ask" | "benchmark" | "admin";
+export type Page = "ask" | "benchmark" | "admin" | "usage";
 
-const LABEL: Record<Page, string> = { ask: "Ask", benchmark: "Benchmark", admin: "Accounts" };
+const LABEL: Record<Page, string> = { ask: "Ask", benchmark: "Benchmark", admin: "Accounts", usage: "Clients & usage" };
 
 const SERVICES: { key: keyof Health["services"]; name: string }[] = [
   { key: "neo4j", name: "Neo4j" },
@@ -39,8 +39,10 @@ interface Props {
 export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onToggleUpdates, corpora, corpus,
   onSelectCorpus, onNewCorpus, onEditCorpus, onCorpusChanged }: Props) {
   // The benchmark compares GraphRAG with vector RAG on SEC filings: only shown for the SEC corpus.
+  // Clients & usage is the operator's view: admins, or anyone on a local setup with sign-in off.
+  const operator = user?.role === "admin" || (meta != null && !meta.auth.enabled && !meta.demo);
   const pages: Page[] = ["ask", ...(corpus?.kind === "sec_insiders" ? ["benchmark" as Page] : []),
-    ...(user?.role === "admin" ? ["admin" as Page] : [])];
+    ...(user?.role === "admin" ? ["admin" as Page] : []), ...(operator ? ["usage" as Page] : [])];
   return (
     <aside className="side">
       <div className="brand">

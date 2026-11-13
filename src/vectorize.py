@@ -148,14 +148,73 @@ def build() -> None:
     driver.close()
 
 
-def retrieve(query: str, k: int = 5, corpus_id: str | None = None) -> list[dict]:
-    """Vector top-k as structured rows (the vector retrieval path).
-    With a corpus, only that corpus's chunks are searched; without one, only
-    chunks that belong to no corpus (the legacy 10-K index)."""
+_COLS = ["chunk_id", "doc_id", "section_path", "filing_date", "text", "entity_ids", "similarity"]
+# Words that carry no meaning for keyword search (English, German, French).
+_KW_STOP = set("""a an the and or of to in on at for with by from is are was were be been has have had do does did
+what which who whom whose when where why how many much this that these those it its his her their them they he she
+i you we my your our me us not no yes can could would should will about into over than then there here also all any
+der die das ein eine einer eines und oder von zu im in am an auf für mit bei aus ist sind war waren hat haben wie
+was wer wo wann welche welcher welches viele sein seine ihr ihre er sie es nicht kein keine auch le la les un une
+des et ou de du au aux pour avec dans sur est sont il elle quel quelle combien""".split())
+
+
+def _kw_terms(query: str) -> list[str]:
+    """The question's meaningful words, plus their synonyms in other languages (thesis -> bachelorarbeit)."""
+    from src.tools.dates import SYNONYMS
+    words = [re.sub(r"[^\w]", "", w) for w in re.findall(r"[\w-]+", query.lower())]
+    words = [w for w in words if len(w) >= 3 and w not in _KW_STOP]
+    out = []
+    for w in words:
+        out += [w] + [x for x in re.split(r"[\s.]+", SYNONYMS.get(w, "")) if len(x) >= 3]
+    return list(dict.fromkeys(out))[:16]
+
+
+def _kw_query(query: str) -> str | None:
+    """An OR-query for Postgres full-text search ('simple' config: no stemming, so it behaves the same in
+    every language; prefix matching covers plurals and compounds: bachelor:* matches Bachelorarbeit)."""
+    terms = _kw_terms(query)
+    return " | ".join(f"{w}:*" for w in terms) or None
+
+
+def bm25(query: str, docs: list[dict], n_total: int, df: dict[str, int], k1: float = 1.2, b: float = 0.75) -> list[float]:
+    """BM25 scores of docs for the query terms (prefix match, like the SQL query). A word found in
+    most chunks (the person's own name, "note") counts for almost nothing; a rare one ("Neo4Py") counts a lot."""
+    import math
+    terms = _kw_terms(query)
+    toks = [re.findall(r"\w+", d["text"].lower()) for d in docs]
+    avg = (sum(map(len, toks)) / len(toks)) if toks else 1.0
+    out = []
+    for t in toks:
+        sc = 0.0
+        for term in terms:
+            tf = sum(1 for w in t if w.startswith(term))
+            if not tf:
+                continue
+            n = df.get(term, 0)
+            idf = math.log(1 + (n_total - n + 0.5) / (n + 0.5))
+            sc += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(t) / avg))
+        out.append(sc)
+    return out
+
+
+def _ensure_fts(cur) -> None:
+    cur.execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS corpus_id text")
+    cur.execute("CREATE INDEX IF NOT EXISTS chunk_embeddings_fts ON chunk_embeddings "
+                "USING gin (to_tsvector('simple', text))")
+
+
+def retrieve(query: str, k: int = 5, corpus_id: str | None = None, hybrid: bool = True) -> list[dict]:
+    """Top-k chunks for a question. With a corpus, only that corpus's chunks are searched; without one,
+    only chunks that belong to no corpus (the legacy 10-K index).
+
+    hybrid=True also runs a keyword search and merges both rankings (reciprocal rank fusion): vectors
+    find paraphrases, keywords find exact names, codes and numbers ("Neo4Py", "Cadi Ayyad", "PNr 1010")
+    that embeddings blur. hybrid=False is plain vector search (used for the baseline)."""
     conn = pg_connect()
     qv = _vec(embed_one(query))
     with conn.cursor() as cur:
-        cur.execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS corpus_id text")
+        _ensure_fts(cur)
+        conn.commit()
         cur.execute(
             """
             SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
@@ -165,13 +224,57 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None) -> list[dict]
             ORDER BY embedding <=> %s::vector
             LIMIT %s;
             """,
-            (qv, corpus_id, qv, k),
+            (qv, corpus_id, qv, k * 3 if hybrid else k),
         )
-        cols = ["chunk_id", "doc_id", "section_path", "filing_date",
-                "text", "entity_ids", "similarity"]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        vec_rows = [dict(zip(_COLS, r)) for r in cur.fetchall()]
+        kw_rows: list[dict] = []
+        tsq = _kw_query(query) if hybrid else None
+        if tsq:
+            cur.execute(
+                """
+                SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM chunk_embeddings
+                WHERE corpus_id IS NOT DISTINCT FROM %s
+                  AND to_tsvector('simple', text) @@ to_tsquery('simple', %s)
+                ORDER BY ts_rank_cd(to_tsvector('simple', text), to_tsquery('simple', %s)) DESC
+                LIMIT 300;
+                """,
+                (qv, corpus_id, tsq, tsq),
+            )
+            cands = [dict(zip(_COLS, r)) for r in cur.fetchall()]
+            if cands:
+                cur.execute("SELECT count(*) FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s", (corpus_id,))
+                n_total = cur.fetchone()[0]
+                df = {}
+                for term in _kw_terms(query):
+                    cur.execute("SELECT count(*) FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s "
+                                "AND to_tsvector('simple', text) @@ to_tsquery('simple', %s)", (corpus_id, f"{term}:*"))
+                    df[term] = cur.fetchone()[0]
+                scores = bm25(query, cands, n_total, df)
+                kw_rows = [r for sc, r in sorted(zip(scores, cands), key=lambda t: -t[0]) if sc > 0][:k * 3]
     conn.close()
-    return rows
+    if not hybrid:
+        return vec_rows
+    fused = fuse([vec_rows, kw_rows], k)
+    # The best exact-word matches always get a place: a chunk that is the only one naming "Neo4Py"
+    # must not lose to chunks that are merely similar in meaning.
+    for r in kw_rows[:2]:
+        if r["chunk_id"] not in {x["chunk_id"] for x in fused}:
+            fused = fused[:-1] if len(fused) >= k else fused
+            fused.append(r)
+    return fused
+
+
+def fuse(rankings: list[list[dict]], k: int, c: int = 60) -> list[dict]:
+    """Reciprocal rank fusion: a chunk ranked high by either search ranks high overall."""
+    score: dict[str, float] = {}
+    rows: dict[str, dict] = {}
+    for ranking in rankings:
+        for rank, r in enumerate(ranking):
+            score[r["chunk_id"]] = score.get(r["chunk_id"], 0.0) + 1.0 / (c + rank + 1)
+            rows.setdefault(r["chunk_id"], r)
+    return [rows[cid] for cid in sorted(score, key=lambda x: -score[x])[:k]]
 
 
 def chunks_matching(corpus_id: str, pattern: str, limit: int = 40) -> list[dict]:

@@ -208,7 +208,7 @@ def plan(question: str, templates: dict[str, dict] | None = None) -> dict:
         f"Query types:\n{_templates_doc(templates)}\n"
         'Reply ONLY JSON: {"query_type":"...","entities":["..."],"value":"..."}.'
     )
-    client = chat_client()
+    client = chat_client("graph_plan")
     resp = client.chat(
         model=config.ROUTER_MODEL,
         messages=[{"role": "system", "content": system},

@@ -11,7 +11,7 @@ TODAY = date(2026, 11, 12)
 
 # How the CV reads after text extraction (one passage, whitespace collapsed).
 CV = ("Room Booking Hochschule Mainz | GitHub 15.03.2026 – 24.06.2026 ● Konzeption eines KI-Assistenten. "
-      "i3mainz, Hochschule Mainz | Projekt VAMoS: KI in Produktions Supply Chain ab 02/2027 (Zusage) Mainz "
+      "Wissenschaftliche Hilfskraft (10 Std./Woche) i3mainz, Hochschule Mainz | Projekt VAMoS: KI in Produktions Supply Chain ab 02/2027 (Zusage) Mainz "
       "Mitarbeiter im Rotationssystem als Werkstudent (Gastronomie) Jamys Burger, Mainz. seit 15.02.2026 Mainz "
       "Mitarbeiter im Rotationssystem als Werkstudent (Gastronomie) McDonalds 02.11.2024 – 12.09.2025 Mainz "
       "Praktikum als Softwareentwickler (40 Std./Woche) General Treasury of the Kingdom (TGR) "
@@ -98,5 +98,21 @@ def test_a_failing_tool_never_breaks_the_answer(monkeypatch):
 def test_skills_follow_the_corpus():
     assert "experience" in skill_for({"kind": "documents", "schema": {"preset": "career"}})["tools"]
     assert skill_for({"kind": "sec_insiders", "schema": {}})["label"] == "SEC insider trades"
-    assert skill_for({"kind": "documents", "schema": {"preset": "custom"}})["tools"] == list(TOOLS)
+    assert set(skill_for({"kind": "documents", "schema": {"preset": "custom"}})["tools"]) == set(TOOLS) - {"in_year"}
     assert skill_for(None)["label"] == "Company filings"
+
+
+def test_next_planned_and_year_checks():
+    (nxt, _), = ask("what position will walid start next?", ["timeline"])[0]
+    assert nxt.startswith("Next, planned") and "VAMoS" in nxt
+    (y, _), = ask("which company did walid work for in 2018?", ["in_year"])[0]
+    assert "No dated period" in y and "2018" in y
+    (y, _), = ask("what was he doing in 2023?", ["in_year"])[0]
+    assert "TGR" in y and "B.Sc." not in y
+
+
+def test_degree_words_beat_names_that_contain_them():
+    ev = [("P1", "Draft Master AI Hochschule Mainz | GitHub 01.03.2025 – 01.07.2025 ● Chat app. "
+                 "STUDIUM M.Sc. Angewandte Informatik Hochschule Mainz 01.09.2024 – AKTUELL Mainz.")]
+    (fact, _), = run_tools("How long has he been studying for his master's?", ev, None, ["duration"], TODAY)[0]
+    assert "M.Sc." in fact and "Draft Master" not in fact

@@ -1,6 +1,6 @@
 import type {
-  Account, AccountStatus, AskResponse, Benchmark, Corpus, CorpusInput, CorpusProfile, DocumentInfo, Health, Meta,
-  Preset, User,
+  Account, AccountOverview, AccountStatus, AskResponse, Benchmark, Billing, ClientAccount, Corpus, CorpusInput,
+  CorpusProfile, DocumentInfo, Health, Meta, Preset, UsageReport, User,
 } from "./types";
 
 export class ApiError extends Error {
@@ -76,6 +76,25 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     }),
+  clientAccounts: () => request<{ accounts: AccountOverview[]; billing: Billing }>("/api/admin/accounts"),
+  createClientAccount: (body: { name: string; industry: string; monthly_credit_eur?: number }) =>
+    request<{ account: ClientAccount }>("/api/admin/accounts", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+  updateClientAccount: (id: string, body: Partial<Pick<ClientAccount, "name" | "industry" | "monthly_credit_eur" | "status">>) =>
+    request<{ account: ClientAccount }>(`/api/admin/accounts/${encodeURIComponent(id)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+  accountUsage: (id: string, days = 30) =>
+    request<UsageReport>(`/api/admin/accounts/${encodeURIComponent(id)}/usage?days=${days}`),
+  accountMembers: (id: string) => request<{ members: User[] }>(`/api/admin/accounts/${encodeURIComponent(id)}/members`),
+  addAccountMember: (id: string, email: string) =>
+    request<{ user: User }>(`/api/admin/accounts/${encodeURIComponent(id)}/members`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }),
+    }),
+  removeAccountMember: (id: string, email: string) =>
+    request<{ ok: boolean }>(`/api/admin/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(email)}`,
+      { method: "DELETE" }),
   health: () => request<Health>("/api/health"),
   benchmark: () => request<Benchmark>("/api/benchmark"),
   ask: (question: string, corpusId: string | null, signal?: AbortSignal) =>

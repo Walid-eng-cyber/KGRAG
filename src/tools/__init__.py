@@ -25,7 +25,13 @@ class Tool:
     name: str
     description: str
     trigger: re.Pattern
-    run: Callable[[str, Evidence, dict, date], list[Fact]]
+    run: Callable[..., list[Fact]]
+    needs_ctx: bool = False            # gets the corpus context (e.g. its tables) as a 5th argument
+
+
+def _table_facts(question, evidence, graph, today, ctx):
+    from src import tables
+    return [(f, "") for f in tables.facts(question, (ctx or {}).get("tables") or [])]
 
 
 def _rx(s: str) -> re.Pattern:
@@ -39,12 +45,16 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          _rx(r"\b(how long|how many (years|months|weeks|days)|duration|wie lange|wie viele (jahre|monate|wochen|tage)|"
              r"dauer|combien de temps|depuis quand|since when|seit wann)\b"), dates.duration),
     Tool("timeline", "Periods in chronological order: first, latest, current",
-         re.compile("|".join(r.pattern for r in (dates._CURRENT, dates._LATEST, dates._FIRST)) +
+         re.compile("|".join(r.pattern for r in (dates._CURRENT, dates._LATEST, dates._FIRST, dates._NEXT)) +
                     r"|\b(timeline|chronolog\w*|in order|order of|reihenfolge|werdegang|career path|parcours)\b", re.I),
          dates.timeline),
     Tool("experience", "Total work experience, overlaps counted once",
          _rx(r"\b(years? of (work )?experience|how much (work )?experience|berufserfahrung|"
              r"wie viel erfahrung|expérience)\b"), dates.experience),
+    Tool("in_year", "What was going on in a given year (or that nothing is recorded for it)",
+         dates._YEAR_Q, dates.in_year),
+    Tool("table", "Rows, counts, totals, lowest/highest and empty cells of tables read from the documents",
+         _rx(r"."), _table_facts, needs_ctx=True),
     Tool("aggregate", "Total, average, highest or lowest of numbers in the graph results",
          _rx(r"\b(total|sum|altogether|combined|average|mean|highest|largest|biggest|most|lowest|smallest|least|"
              r"insgesamt|gesamt|durchschnitt\w*|größte|höchste|kleinste|niedrigste)\b"), numbers.aggregate),
@@ -58,6 +68,7 @@ CORPUS_SCAN = {
     "duration": r"(19|20)[0-9]{2}",
     "timeline": r"(19|20)[0-9]{2}",
     "experience": r"(19|20)[0-9]{2}",
+    "in_year": r"(19|20)[0-9]{2}",
 }
 
 
@@ -68,7 +79,7 @@ def scan_patterns(question: str, allowed: list[str]) -> list[str]:
 
 
 def run_tools(question: str, evidence: Evidence, graph: dict | None, allowed: list[str],
-              today: date | None = None) -> tuple[list[Fact], list[str]]:
+              today: date | None = None, ctx: dict | None = None) -> tuple[list[Fact], list[str]]:
     """Run every allowed tool whose trigger matches. Returns (facts, names of the tools that produced them)."""
     today = today or date.today()
     facts, used = [], []
@@ -77,7 +88,8 @@ def run_tools(question: str, evidence: Evidence, graph: dict | None, allowed: li
         if not tool or not tool.trigger.search(question):
             continue
         try:
-            out = tool.run(question, evidence, graph or {}, today)
+            out = (tool.run(question, evidence, graph or {}, today, ctx) if tool.needs_ctx
+                   else tool.run(question, evidence, graph or {}, today))
         except Exception:  # noqa: BLE001 — a tool must never break an answer
             out = []
         if out:

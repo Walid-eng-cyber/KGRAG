@@ -12,14 +12,15 @@ from src.tools import TOOLS
 SKILLS: dict[str, dict] = {
     "career": {
         "label": "CV & career",
-        "tools": ["age", "duration", "timeline", "experience", "aggregate"],
+        "tools": ["age", "duration", "timeline", "experience", "in_year", "table", "aggregate"],
         "guidance": "These documents describe a person's education, jobs and projects. For ages, "
                     "durations, dates in order and years of experience, use the COMPUTED FACTS; "
-                    "a planned or future position is not experience yet.",
+                    "a planned or future position is not experience yet. In German and Austrian grading 1,0 is the "
+                    "best grade and 4,0 the lowest pass, so the best grade is the lowest number.",
     },
     "company": {
         "label": "Company filings",
-        "tools": ["duration", "timeline", "aggregate"],
+        "tools": ["duration", "timeline", "table", "aggregate"],
         "guidance": "These are company documents. Quote figures with their units and period "
                     "(fiscal year, quarter); never combine figures from different periods.",
     },
@@ -31,7 +32,7 @@ SKILLS: dict[str, dict] = {
     },
     "general": {
         "label": "General",
-        "tools": list(TOOLS),
+        "tools": [t for t in TOOLS if t != "in_year"],   # "no period in 2018" only makes sense for CVs
         "guidance": "",
     },
 }

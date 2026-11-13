@@ -8,6 +8,7 @@ import pytest
 _TMP = tempfile.mkdtemp(prefix="kgrag-tests-")
 os.environ["DOCUMENTS_DB"] = os.path.join(_TMP, "documents.db")
 os.environ["UPLOAD_DIR"] = os.path.join(_TMP, "uploads")
+os.environ["USAGE_DB"] = os.path.join(_TMP, "usage.db")
 
 from server import auth  # noqa: E402
 

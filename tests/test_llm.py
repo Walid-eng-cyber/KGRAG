@@ -21,7 +21,7 @@ def _ok(content):
 def test_default_provider_is_local_ollama(monkeypatch):
     monkeypatch.setattr(config, "LLM_PROVIDER", "ollama")
     assert not llm.is_hosted()
-    assert type(llm.chat_client()).__module__.startswith("ollama")
+    assert type(llm.chat_client().inner).__module__.startswith("ollama")
 
 
 def test_hosted_client_speaks_chat_completions_and_returns_ollama_shape(monkeypatch):

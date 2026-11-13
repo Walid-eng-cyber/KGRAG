@@ -82,7 +82,11 @@ def score(ans: str, spec: dict) -> bool:
         return all(_has(a, v) for v in spec["v"])
     if t == "duration":
         got = _duration(a)
-        return got is not None and got[0] * 12 + got[1] == spec["years"] * 12 + spec["months"]
+        if got is not None and got[0] * 12 + got[1] == spec["years"] * 12 + spec["months"]:
+            return True
+        # the same period stated exactly in days ("30 days") is right too, when the gold set gives the days
+        days = re.search(r"(\d+)\s*(?:days?|tage?n?|jours?)\b", a.lower())
+        return bool(spec.get("days") and days and int(days[1]) == spec["days"])
     raise ValueError(f"unknown score type {t!r}")
 
 
@@ -105,13 +109,13 @@ def baseline(question: str, corpus: dict, today: date, k: int = 5) -> dict:
     import config
     from src.llm import chat_client
     from src.vectorize import retrieve
-    hits = retrieve(question, k, corpus["id"])
+    hits = retrieve(question, k, corpus["id"], hybrid=False)
     if not hits:
         return {"answer": "I don't have enough information."}
     ctx = "\n".join(f"[{i + 1}] {' '.join(h['text'].split())[:1200]}" for i, h in enumerate(hits))
     system = (f"Today is {today:%d %B %Y}. Answer the question using ONLY the passages below. If they do not "
               "contain the answer, reply exactly: \"I don't have enough information.\" Be concise.")
-    resp = chat_client().chat(
+    resp = chat_client("eval").chat(
         model=config.ANSWER_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": f"Question: {question}\n\nPassages:\n{ctx}"}])

@@ -23,6 +23,7 @@ from typing import get_args
 import config
 from src import routerlog
 from src.graph_query import run_graph_query
+from src import meter
 from src.llm import chat_client
 from src.schema import Entities, Relations
 from src.vectorize import retrieve as vector_retrieve
@@ -106,7 +107,7 @@ def classify(question: str) -> tuple[Path, float]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     messages.append({"role": "user", "content": question})
 
-    client = chat_client()
+    client = chat_client("router")
     try:
         resp = client.chat(model=config.ROUTER_MODEL, messages=messages, format="json")
         data = json.loads(resp["message"]["content"])
@@ -128,7 +129,8 @@ def classify(question: str) -> tuple[Path, float]:
 
 def vector_path(question: str, k: int = 5, corpus: dict | None = None) -> list[dict]:
     try:
-        return vector_retrieve(question, k, corpus["id"] if corpus else None)
+        with meter.span("vector"):
+            return vector_retrieve(question, k, corpus["id"] if corpus else None)
     except Exception as e:  # noqa: BLE001 - e.g. no vector index built for this corpus
         print(f"[router] vector path unavailable: {type(e).__name__}", file=sys.stderr)
         return []
@@ -137,10 +139,11 @@ def vector_path(question: str, k: int = 5, corpus: dict | None = None) -> list[d
 def graph_path(question: str, corpus: dict | None = None) -> dict:
     # Safe path: entity resolution + parameterized template. The model never
     # emits Cypher (see src/graph_query.py and src/corpus_graph.py).
-    if corpus and corpus.get("kind") == "documents":
-        from src.corpus_graph import run_query
-        return run_query(question, corpus)
-    return run_graph_query(question, corpus)
+    with meter.span("graph"):
+        if corpus and corpus.get("kind") == "documents":
+            from src.corpus_graph import run_query
+            return run_query(question, corpus)
+        return run_graph_query(question, corpus)
 
 
 # --- 3. The router -----------------------------------------------------------

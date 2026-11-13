@@ -156,6 +156,7 @@ export interface User {
   role: "user" | "admin";
   status: AccountStatus;
   updates_opt_in: boolean;
+  account_id?: string | null;
 }
 
 export interface Account extends User {
@@ -171,6 +172,7 @@ export interface Meta {
   tickers: string[];
   corpus?: { label: string; detail: string }[];
   models: { router: string; answer: string; embed: string };
+  billing?: { currency: string; priced_as: string | null };
 }
 
 export interface ServiceStatus {
@@ -200,3 +202,102 @@ export interface Benchmark {
   latency: { graphrag_median_s: number | null; vector_median_s: number | null };
   costs: { label: string; vector: string | null; graphrag: string | null }[];
 }
+
+// ---- Client accounts and usage (server/usage.py) ----
+
+export type CreditStatus = "ok" | "at_risk" | "over" | "no_credit";
+
+export interface Credit {
+  monthly_credit_eur: number;
+  spent_eur: number;
+  remaining_eur: number;
+  projected_eur: number;
+  used_pct: number | null;
+  status: CreditStatus;
+  month: string;
+  resets_at: string;
+}
+
+export interface Billing {
+  currency: string;
+  priced_as: string | null;
+  eur_per_1m_in: number;
+  eur_per_1m_out: number;
+  usd_to_eur: number;
+  default_monthly_credit_eur: number;
+}
+
+export interface ClientAccount {
+  id: string;
+  name: string;
+  industry: string;
+  monthly_credit_eur: number;
+  status: "active" | "suspended";
+  members: number;
+  created_at: string;
+}
+
+export interface AccountOverview {
+  id: string;
+  name: string;
+  industry: string;
+  status: "active" | "suspended";
+  members: number;
+  credit: Credit;
+  last_7d: { questions: number; requests: number; cost_eur: number; active_users: number;
+    p95_ms: number | null; error_pct: number | null };
+}
+
+export interface StageUsage {
+  stage: string;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_eur: number;
+  cost_share_pct: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+}
+
+export interface UserUsage {
+  user: string;
+  questions: number;
+  ingests: number;
+  requests: number;
+  cost_eur: number;
+  tokens: number;
+  p95_ms: number | null;
+  errors: number;
+  last_seen: string | null;
+  cost_share_pct: number;
+}
+
+export interface DayUsage {
+  date: string;
+  questions: number;
+  ingests: number;
+  requests: number;
+  cost_eur: number;
+  active_users: number;
+}
+
+export interface UsageReport {
+  account: ClientAccount;
+  billing: Billing;
+  window: { days: number; since: string; until: string };
+  credit: Credit;
+  totals: {
+    questions: number; ingests: number; requests: number; documents_chunks: number;
+    cost_eur: number; ask_cost_eur: number; ingest_cost_eur: number; tokens_in: number; tokens_out: number;
+    cost_per_question_eur: number | null; cost_per_answer_eur: number | null; cost_per_request_eur: number | null;
+    active_users: number; active_users_7d: number; estimated_cost_share_pct: number;
+  };
+  latency: { p50_ms: number | null; p95_ms: number | null; p99_ms: number | null };
+  quality: Record<"answered_pct" | "no_evidence_pct" | "error_pct" | "retry_pct" | "citation_fail_pct"
+    | "low_confidence_pct" | "ingest_failed_pct", number | null>;
+  paths: Record<string, number>;
+  stages: StageUsage[];
+  users: UserUsage[];
+  daily: DayUsage[];
+}
+

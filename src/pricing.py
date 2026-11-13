@@ -16,6 +16,7 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
@@ -43,3 +44,20 @@ def resolve_prices(model: str) -> tuple[float, float]:
 
 def is_free(model: str) -> bool:
     return resolve_prices(model) == (0.0, 0.0)
+
+
+def billing_prices(model: str) -> tuple[str, float, float]:
+    """(priced_as, input, output) USD per 1M tokens used to bill a call.
+
+    With BILLING_PRICE_AS set, every call is priced as that model — a local Ollama
+    call included — so client usage reflects what a hosted provider would charge.
+    """
+    as_model = config.BILLING_PRICE_AS or model
+    for key, prices in PRICING.items():
+        if key in (as_model or "").lower():
+            return as_model, *prices
+    return as_model, *resolve_prices(model)
+
+
+def usd_to_eur(usd: float) -> float:
+    return usd * config.USD_TO_EUR

@@ -139,7 +139,7 @@ def score(ans: str, exp: dict) -> bool:
 
 # --- Baseline: plain vector RAG (no graph, no router) -------------------------
 def vanilla_rag(question: str, k: int = 5) -> str:
-    hits = retrieve(question, k)
+    hits = retrieve(question, k, hybrid=False)
     if not hits:
         return "I don't have enough information."
     ctx = "\n".join(f"[{i+1}] {' '.join(h['text'].split())[:400]}"
@@ -147,7 +147,7 @@ def vanilla_rag(question: str, k: int = 5) -> str:
     system = ("Answer the question using ONLY the passages below. If they do not "
               "contain the answer, reply exactly: \"I don't have enough "
               "information.\" Be concise.")
-    resp = chat_client().chat(
+    resp = chat_client("eval").chat(
         model=config.ANSWER_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": f"Question: {question}\n\nPassages:\n{ctx}"}])

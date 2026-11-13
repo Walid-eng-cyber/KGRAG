@@ -76,7 +76,7 @@ def test_sign_up_creates_a_pending_account_without_a_session(client):
     r = signup(client, "alice")
     assert r.status_code == 200
     assert r.json()["user"] == {"email": "alice@gmail.com", "name": "Alice", "picture": None, "role": "user",
-                                "status": "pending", "updates_opt_in": False}
+                                "status": "pending", "updates_opt_in": False, "account_id": None}
     assert "set-cookie" not in r.headers
     r = signin(client, "alice")
     assert r.status_code == 403 and "waiting for approval" in r.json()["detail"]
@@ -194,7 +194,11 @@ def test_unsubscribe_link_opts_out_without_signing_in(client, env):
 
 def test_tampered_cookie_is_rejected(client):
     signup(client, "admin")
-    client.cookies.set(auth.COOKIE, client.cookies.get(auth.COOKIE)[:-3] + "abc")
+    tampered = client.cookies.get(auth.COOKIE)[:-3] + "abc"
+    # Replace, don't add: the jar would otherwise hold the genuine cookie (domain testserver.local)
+    # next to the tampered one, and which of the two gets sent is not fixed.
+    client.cookies.clear()
+    client.cookies.set(auth.COOKIE, tampered)
     assert client.get("/api/auth/me").status_code == 401
 
 

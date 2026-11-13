@@ -69,7 +69,8 @@ def extract_text(path: Path, kind: str) -> str:
             if reader.is_encrypted:
                 raise DocumentError("This PDF is password-protected.")
             pages = reader.pages[:MAX_PDF_PAGES]
-            text = "\n\n".join((p.extract_text() or "") for p in pages)
+            # pages are separated by a form feed, so layout-aware chunking can find page tops and bottoms
+            text = "\n\f\n".join((p.extract_text() or "") for p in pages)
         except DocumentError:
             raise
         except Exception as e:  # noqa: BLE001 - malformed PDFs raise many kinds of errors
