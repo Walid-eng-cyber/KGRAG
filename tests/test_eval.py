@@ -36,3 +36,14 @@ def test_refusals_are_recognised():
 
 def test_id_ranges():
     assert _ids("1-3,26") == {1, 2, 3, 26} and _ids(None) is None
+
+
+def test_duration_in_days_counts_when_the_gold_gives_days():
+    assert score("It lasted 30 days [C1].", {"type": "duration", "years": 0, "months": 1, "days": 30})
+    assert not score("It lasted 31 days.", {"type": "duration", "years": 0, "months": 1, "days": 30})
+
+
+def test_no_record_for_a_year_is_a_refusal():
+    s = {"type": "refuse"}
+    assert score("[C1] No dated period in these documents overlaps 2018: the earliest starts 01 Sep 2019.", s)
+    assert score("Nothing is recorded for 2018.", s)

@@ -31,7 +31,8 @@ _REFUSE = re.compile(
     r"(?:do|does) not (?:contain|mention|say|include|state|provide)|no (?:grade|data|record|mention)|"
     r"cannot (?:find|answer|determine)|can'?t (?:find|answer|determine)|unable to|"
     r"keine (?:information|angabe|note)|nicht (?:genannt|angegeben|enthalten|erwähnt|verfügbar)|"
-    r"not yet (?:graded|been graded)|hasn'?t been graded)", re.I)
+    r"not yet (?:graded|been graded)|hasn'?t been graded|"
+    r"no (?:dated )?(?:period|record|entry)|nothing (?:is )?(?:recorded|listed|mentioned))", re.I)
 
 _WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
           "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "null": 0, "eins": 1, "ein": 1, "eine": 1, "zwei": 2,
@@ -82,7 +83,11 @@ def score(ans: str, spec: dict) -> bool:
         return all(_has(a, v) for v in spec["v"])
     if t == "duration":
         got = _duration(a)
-        return got is not None and got[0] * 12 + got[1] == spec["years"] * 12 + spec["months"]
+        if got is not None and got[0] * 12 + got[1] == spec["years"] * 12 + spec["months"]:
+            return True
+        # the same period stated exactly in days ("30 days") is right too, when the gold set gives the days
+        days = re.search(r"(\d+)\s*(?:days?|tage?n?|jours?)\b", a.lower())
+        return bool(spec.get("days") and days and int(days[1]) == spec["days"])
     raise ValueError(f"unknown score type {t!r}")
 
 
