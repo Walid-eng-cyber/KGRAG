@@ -165,8 +165,20 @@ def _kw_terms(query: str) -> list[str]:
     words = [w for w in words if len(w) >= 3 and w not in _KW_STOP]
     out = []
     for w in words:
-        out += [w] + [x for x in re.split(r"[\s.]+", SYNONYMS.get(w, "")) if len(x) >= 3]
-    return list(dict.fromkeys(out))[:16]
+        out += [stem(w)] + [x for x in re.split(r"[\s.]+", SYNONYMS.get(w, "")) if len(x) >= 3]
+    return list(dict.fromkeys(out))[:20]
+
+
+_SUFFIXES = ("ungen", "ings", "ing", "ens", "ern", "en", "er", "es", "ed", "s", "e")
+
+
+def stem(word: str) -> str:
+    """A crude stem for prefix search: "Turnens" -> "turn", "Deutschen" -> "deutsch", "projects" -> "project".
+    Prefix matching then finds "Turnen", "Turnwettkämpfen", "Deutsch"."""
+    for suf in _SUFFIXES:
+        if word.endswith(suf) and len(word) - len(suf) >= 4:
+            return word[: -len(suf)]
+    return word
 
 
 def _kw_query(query: str) -> str | None:
@@ -197,6 +209,46 @@ def bm25(query: str, docs: list[dict], n_total: int, df: dict[str, int], k1: flo
     return out
 
 
+_LANG_WORDS = {
+    "en": set("the and of to in is for with on that this are was by from as at an be have has which".split()),
+    "de": set("der die das und in zu den von mit ist für auf des im dem nicht ein eine als auch bei sich".split()),
+    "fr": set("le la les et des en du une un pour dans sur est au par avec que qui ne pas aux ce".split()),
+}
+_LANG_NAMES = {"en": "English", "de": "German", "fr": "French"}
+_corpus_lang: dict[str | None, str] = {}
+
+
+def language(text: str) -> str | None:
+    """The language of a text from its function words; None if unclear."""
+    words = re.findall(r"[a-zäöüéèàç]+", text.lower())
+    scores = {lang: sum(w in ws for w in words) for lang, ws in _LANG_WORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 2 and list(scores.values()).count(scores[best]) == 1 else None
+
+
+def corpus_language(cur, corpus_id: str | None) -> str | None:
+    if corpus_id not in _corpus_lang:
+        cur.execute("SELECT text FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s LIMIT 40", (corpus_id,))
+        _corpus_lang[corpus_id] = language(" ".join(r[0] for r in cur.fetchall())) or ""
+    return _corpus_lang[corpus_id] or None
+
+
+def translate(question: str, lang: str) -> str | None:
+    """The question in the corpus's language, for search only (answers stay in the asker's language)."""
+    try:
+        import config
+        from src.llm import chat_client
+        resp = chat_client("translate").chat(
+            model=config.ROUTER_MODEL, options={"temperature": 0},
+            messages=[{"role": "system", "content": f"Translate the user's question into {_LANG_NAMES[lang]}. "
+                                                    "Keep names as they are. Reply with the translation only."},
+                      {"role": "user", "content": question}])
+        out = (resp["message"]["content"] or "").strip().strip('"')
+        return out if 0 < len(out) < 400 else None
+    except Exception:  # noqa: BLE001 — search still works with the original question
+        return None
+
+
 def _ensure_fts(cur) -> None:
     cur.execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS corpus_id text")
     cur.execute("CREATE INDEX IF NOT EXISTS chunk_embeddings_fts ON chunk_embeddings "
@@ -215,6 +267,13 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None, hybrid: bool 
     with conn.cursor() as cur:
         _ensure_fts(cur)
         conn.commit()
+        # A question in another language than the documents ("gymnastics" vs "Turnen"): search both versions.
+        translated = None
+        if hybrid:
+            ql, cl = language(query), corpus_language(cur, corpus_id)
+            if cl and ql != cl:
+                translated = translate(query, cl)
+        kw_query = f"{query} {translated}" if translated else query
         cur.execute(
             """
             SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
@@ -227,8 +286,16 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None, hybrid: bool 
             (qv, corpus_id, qv, k * 3 if hybrid else k),
         )
         vec_rows = [dict(zip(_COLS, r)) for r in cur.fetchall()]
+        vec_rows2: list[dict] = []
+        if translated:
+            tv = _vec(embed_one(translated))
+            cur.execute("""SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids,
+                                  1 - (embedding <=> %s::vector) AS similarity
+                           FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s
+                           ORDER BY embedding <=> %s::vector LIMIT %s;""", (tv, corpus_id, tv, k * 3))
+            vec_rows2 = [dict(zip(_COLS, r)) for r in cur.fetchall()]
         kw_rows: list[dict] = []
-        tsq = _kw_query(query) if hybrid else None
+        tsq = _kw_query(kw_query) if hybrid else None
         if tsq:
             cur.execute(
                 """
@@ -247,16 +314,17 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None, hybrid: bool 
                 cur.execute("SELECT count(*) FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s", (corpus_id,))
                 n_total = cur.fetchone()[0]
                 df = {}
-                for term in _kw_terms(query):
+                for term in _kw_terms(kw_query):
                     cur.execute("SELECT count(*) FROM chunk_embeddings WHERE corpus_id IS NOT DISTINCT FROM %s "
                                 "AND to_tsvector('simple', text) @@ to_tsquery('simple', %s)", (corpus_id, f"{term}:*"))
                     df[term] = cur.fetchone()[0]
-                scores = bm25(query, cands, n_total, df)
+                scores = bm25(kw_query, cands, n_total, df)
                 kw_rows = [r for sc, r in sorted(zip(scores, cands), key=lambda t: -t[0]) if sc > 0][:k * 3]
     conn.close()
     if not hybrid:
         return vec_rows
-    fused = fuse([vec_rows, kw_rows], k)
+    fused = diversify(fuse([vec_rows, kw_rows] + ([vec_rows2] if vec_rows2 else []), k * 3), k)
+    kw_rows = diversify(kw_rows, len(kw_rows))
     # The best exact-word matches always get a place: a chunk that is the only one naming "Neo4Py"
     # must not lose to chunks that are merely similar in meaning.
     for r in kw_rows[:2]:
@@ -264,6 +332,23 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None, hybrid: bool 
             fused = fused[:-1] if len(fused) >= k else fused
             fused.append(r)
     return fused
+
+
+def _wordset(text: str) -> set[str]:
+    return set(re.findall(r"\w{3,}", text.lower()))
+
+
+def diversify(rows: list[dict], k: int, threshold: float = 0.8) -> list[dict]:
+    """Drop chunks that repeat one already kept (two versions of the same CV, a reprinted page), so the
+    k slots go to different content. Near-duplicate = most words shared (Jaccard >= threshold)."""
+    kept: list[tuple[dict, set[str]]] = []
+    for r in rows:
+        w = _wordset(r["text"])
+        if all(len(w & kw) / max(1, len(w | kw)) < threshold for _, kw in kept):
+            kept.append((r, w))
+        if len(kept) == k:
+            break
+    return [r for r, _ in kept]
 
 
 def fuse(rankings: list[list[dict]], k: int, c: int = 60) -> list[dict]:

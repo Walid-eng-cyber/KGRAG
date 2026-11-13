@@ -312,3 +312,115 @@ def test_with_sign_in_off_the_operator_views_are_open_and_new_clients_get_the_de
     assert [(a["name"], a["credit"]["spent_eur"]) for a in rows["accounts"]] == [("Clinic", 0.0)]
     assert rows["billing"]["priced_as"] == "claude-sonnet-5-5" and rows["billing"]["currency"] == "EUR"
     assert c.get("/api/meta").json()["billing"] == {"currency": "EUR", "priced_as": "claude-sonnet-5-5"}
+
+
+def _acting(monkeypatch, tmp_path, who="pinned.amira@northbridge.example"):
+    """A sign-in-off server pinned to one client user (KGRAG_AS_USER), with that user in an account."""
+    env = {"USERS_DB": str(tmp_path / "users.db"), "KGRAG_AS_USER": who}
+    monkeypatch.setattr(auth, "settings", auth.Settings(env))
+    store = auth.settings.store
+    acct = store.create_account("Northbridge Talent", "Recruitment agency")
+    store.create(who, "Amira", None, admin=False, updates_opt_in=False)
+    store.set_status(who, "approved", by="test")
+    store.set_account(who, acct["id"])
+    return acct
+
+
+def test_a_pinned_server_attributes_questions_to_that_users_account(usage, monkeypatch, tmp_path):
+    import src.answer
+    acct = _acting(monkeypatch, tmp_path)
+    monkeypatch.setattr(src.answer, "answer", _fake_answer)
+    corpus = main.corpus_store.create("Profiles", "", "documents", {"preset": "career", "entities": [],
+                                                                    "relations": []}, "pinned.amira@northbridge.example")
+    c = TestClient(main.app)
+    assert c.get("/api/meta").json()["acting_as"] == {"email": "pinned.amira@northbridge.example", "name": "Amira",
+                                                       "account": "Northbridge Talent"}
+    assert [x["id"] for x in c.get("/api/corpora").json()["corpora"]] == [corpus["id"]]   # their own corpus
+    assert c.post("/api/ask", json={"question": "Who fits job J-42?"}).status_code == 400   # must name a corpus
+    assert c.post("/api/ask", json={"question": "Who fits job J-42?", "corpus_id": corpus["id"]}).status_code == 200
+    (e,) = usage._events(None, NOW - timedelta(days=3650))
+    assert e["account_id"] == acct["id"] and e["user_email"] == "pinned.amira@northbridge.example"
+    # Operator views belong to the main server, not to a client's.
+    assert c.get("/api/admin/accounts").status_code == 403
+
+
+def test_a_pinned_server_with_an_unknown_user_says_so(usage, monkeypatch, tmp_path):
+    monkeypatch.setattr(auth, "settings", auth.Settings({"USERS_DB": str(tmp_path / "u.db"),
+                                                        "KGRAG_AS_USER": "nobody@x.example"}))
+    c = TestClient(main.app)
+    assert c.get("/api/meta").json()["acting_as"] is None
+    r = c.get("/api/corpora")
+    assert r.status_code == 503 and "nobody@x.example" in r.json()["detail"]
+
+
+def test_acting_as_a_user_is_refused_when_sign_in_is_on():
+    with pytest.raises(RuntimeError, match="only works with sign-in off"):
+        auth.Settings({"GOOGLE_CLIENT_ID": "x.apps.googleusercontent.com", "SESSION_SECRET": "s" * 40,
+                       "KGRAG_AS_USER": "pinned.amira@northbridge.example"})
+
+
+def test_a_clients_users_share_its_corpora_and_other_clients_cannot_see_them(monkeypatch, tmp_path):
+    from server.corpora import CorpusStore
+    monkeypatch.setattr(main, "corpus_store", CorpusStore(tmp_path / "documents.db"))
+    users = UserStore(tmp_path / "users.db")
+    a, b = users.create_account("Client A"), users.create_account("Client B")
+    for email, acct in [("a1@a.example", a), ("a2@a.example", a), ("b1@b.example", b), ("solo@x.example", None)]:
+        users.create(email, email.split("@")[0], None, admin=False, updates_opt_in=False)
+        users.set_status(email, "approved", by="test")
+        if acct:
+            users.set_account(email, acct["id"])
+
+    def as_(email):   # a sign-in-off server acting as this user
+        monkeypatch.setattr(auth, "settings", auth.Settings({"USERS_DB": str(tmp_path / "users.db"),
+                                                            "KGRAG_AS_USER": email}))
+        return TestClient(main.app)
+
+    made = as_("a1@a.example").post("/api/corpora", json={"name": "Profiles", "preset": "career"}).json()["corpus"]
+    assert made["account_id"] == a["id"]
+
+    mate = as_("a2@a.example")                                   # a teammate in the same client
+    assert [c["id"] for c in mate.get("/api/corpora").json()["corpora"]] == [made["id"]]
+    assert mate.get(f"/api/corpora/{made['id']}/documents").status_code == 200
+    assert mate.patch(f"/api/corpora/{made['id']}", json={"name": "Renamed"}).json()["corpus"]["name"] == "Renamed"
+
+    other = as_("b1@b.example")                                  # another client: nothing, not even a hint
+    assert other.get("/api/corpora").json()["corpora"] == []
+    assert other.get(f"/api/corpora/{made['id']}/documents").status_code == 404
+    assert as_("solo@x.example").get("/api/corpora").json()["corpora"] == []
+
+    mine = as_("solo@x.example").post("/api/corpora", json={"name": "Mine", "preset": "general"}).json()["corpus"]
+    assert mine["account_id"] is None                            # no account: private to its owner, as before
+    assert as_("a1@a.example").get(f"/api/corpora/{mine['id']}/documents").status_code == 404
+
+
+def test_corpora_from_before_client_accounts_gain_the_account_column(tmp_path):
+    import sqlite3
+    from server.corpora import CorpusStore
+    path = tmp_path / "documents.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE corpora (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
+                "kind TEXT NOT NULL, schema_json TEXT NOT NULL, owner TEXT, created_at TEXT NOT NULL)")
+    old.execute("INSERT INTO corpora VALUES ('c_old', 'Old', '', 'documents', '{}', 'ann@x.example', '2026-01-01')")
+    old.commit()
+    old.close()
+    store = CorpusStore(path)
+    assert [c["id"] for c in store.list_for("ann@x.example")] == ["c_old"]            # still theirs, still private
+    assert store.visible("c_old", "ann@x.example", "acct_1") is not None
+    store.assign("c_old", "acct_1")
+    assert store.visible("c_old", "ann@x.example") is None                              # now the account's, not personal
+    assert store.visible("c_old", None, "acct_1") is not None
+
+
+def test_ingest_usage_is_attributed_to_the_uploader_and_their_client(usage, monkeypatch, tmp_path):
+    from server.corpora import CorpusStore
+    monkeypatch.setattr(main, "corpus_store", CorpusStore(tmp_path / "documents.db"))
+    corpus = main.corpus_store.create("Profiles", "", "documents", {"preset": "career", "entities": [], "relations": []},
+                                      "ann@x.example", account_id="acct_1")
+    monkeypatch.setattr(main.corpus_graph, "ingest_text", lambda c, doc_id, title, text, progress:
+                        {"chunks": 3, "entities": 5, "relations": 4})
+    main._ingest({"id": "DOC-1", "title": "CV", "corpus_id": corpus["id"], "uploaded_by": "ann@x.example"},
+                 "x" * 3000, lambda *a: None)
+    (e,) = usage._events(None, NOW - timedelta(days=3650))
+    assert (e["kind"], e["outcome"], e["account_id"], e["user_email"], e["units"]) == \
+           ("ingest", "ok", "acct_1", "ann@x.example", 3)
+    assert e["cost_eur"] > 0 and e["estimated"] == 1 and e["priced_as"] == "claude-sonnet-5-5"

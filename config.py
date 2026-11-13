@@ -86,3 +86,7 @@ DEFAULT_MONTHLY_CREDIT_EUR = float(os.getenv("DEFAULT_MONTHLY_CREDIT_EUR", "2500
 # Measured wall-clock per chunk on this machine (for the local time estimate).
 SECONDS_PER_CHUNK = float(os.getenv("SECONDS_PER_CHUNK", "20.0"))
 EXTRACTION_TIMEOUT_S = int(os.getenv("EXTRACTION_TIMEOUT_S", "240"))  # per model call while extracting
+
+# How documents are cut into chunks at ingest: "sentence" (~512-token pieces, default) or "layout"
+# (sections and dated entries kept whole; see src/chunking.py).
+CHUNKING = os.getenv("CHUNKING", "sentence").strip().lower()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import type { DocumentInfo } from "../types";
+import { DocumentViewer } from "./DocumentViewer";
 
 const ACTIVE = new Set(["queued", "ingesting"]);
 const PENDING = new Set(["uploaded", "failed"]);
@@ -14,6 +15,7 @@ export function DocumentsPanel({ corpusId, onChanged }: { corpusId: string; onCh
   const [limits, setLimits] = useState({ maxMb: 20, accepted: [".pdf", ".txt", ".md", ".html"] });
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(0);
+  const [viewing, setViewing] = useState<DocumentInfo | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -101,7 +103,12 @@ export function DocumentsPanel({ corpusId, onChanged }: { corpusId: string; onCh
           <li key={d.id} className={`doc ${d.status}`} title={`${d.filename} · ${size(d.size_bytes)}`}>
             <div className="doc-row">
               <span className="doc-kind">{d.kind === "pdf" ? "PDF" : d.kind === "html" ? "HTML" : "TXT"}</span>
-              <span className="doc-title">{d.title}</span>
+              {d.status === "ready" ? (
+                <button className="doc-title doc-open" aria-haspopup="dialog" title={`Read ${d.title}`}
+                  onClick={() => setViewing(d)}>{d.title}</button>
+              ) : (
+                <span className="doc-title">{d.title}</span>
+              )}
               {canManage && !ACTIVE.has(d.status) && (
                 <button className="doc-remove" aria-label={`Remove ${d.title}`} onClick={() => void remove(d)}>×</button>
               )}
@@ -142,6 +149,7 @@ export function DocumentsPanel({ corpusId, onChanged }: { corpusId: string; onCh
       )}
       {canManage && <span className="docs-hint">PDF, TXT, Markdown or HTML · up to {limits.maxMb} MB · a few minutes each on local models</span>}
       {error && <div className="docs-error" role="alert">{error}</div>}
+      {viewing && <DocumentViewer doc={viewing} onClose={() => setViewing(null)} />}
     </section>
   );
 }

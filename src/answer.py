@@ -197,15 +197,41 @@ MAX_PROMOTED = 4   # chunks found by a tool's corpus scan that may be added as p
 PASSAGE_CHARS = 1200  # enough of each chunk (512 tokens ~ 2,000 chars) to hold its key facts
 
 
-def format_passages(vs: list[dict], limit: int = 4) -> list[tuple[str, str]]:
-    """(citation, passage-text) tuples from vector hits."""
+def format_passages(vs: list[dict], limit: int = 4, question: str | None = None) -> list[tuple[str, str]]:
+    """(citation, passage-text) tuples from vector hits. A chunk longer than PASSAGE_CHARS is cut to the
+    window that best matches the question, not to its first characters (the answer is often further in)."""
     out = []
     for r in vs[:limit]:
         cite = (f"{r['doc_id']} · {r['section_path']} · {r['filing_date']} "
                 f"(chunk {r['chunk_id'][:8]})")
-        text = re.sub(r"\s+", " ", r["text"]).strip()[:PASSAGE_CHARS]
-        out.append((cite, text))
+        text = re.sub(r"\s+", " ", r["text"]).strip()
+        out.append((cite, best_window(text, question, PASSAGE_CHARS)))
     return out
+
+
+def best_window(text: str, question: str | None, size: int) -> str:
+    """The `size`-character window of `text` with the most question words (and their synonyms)."""
+    if len(text) <= size:
+        return text
+    if not question:
+        return text[:size]
+    from src.vectorize import _kw_terms
+    terms = _kw_terms(question)
+    low = text.lower()
+    hits = sorted(m.start() for t in terms for m in re.finditer(rf"\b{re.escape(t)}", low))
+    if not hits:
+        return text[:size]
+    # the window start (at a hit, a little before it) that covers the most hits
+    best, best_n = 0, -1
+    for h in hits:
+        start = max(0, min(h - size // 4, len(text) - size))
+        n = sum(start <= x < start + size for x in hits)
+        if n > best_n:
+            best, best_n = start, n
+    if best > 0:                                      # begin at a word
+        best = text.find(" ", best) + 1 or best
+    piece = text[best:best + size]
+    return ("…" if best > 0 else "") + piece + ("…" if best + size < len(text) else "")
 
 
 def _dedup_passages(vs: list[dict], graph_src_chunks: set[str] | None = None) -> list[dict]:
@@ -297,7 +323,7 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
     # 2. Passages, deduped across both sets (a passage that IS a graph fact's
     #    source is redundant) and within the set.
     vhits = _dedup_passages(res.get("vector", []), graph_src_chunks) if "vector" in res else []
-    passages = format_passages(vhits)
+    passages = format_passages(vhits, question=question)
 
     if not graph_stmts and not passages:
         return {"question": question, "path_used": routed["path_used"],
@@ -336,7 +362,7 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
                 h = extra[int(x[1:]) - 1]
                 tag = f"P{len(vhits) + 1}"
                 vhits.append(h)
-                cite, text = format_passages([h])[0]
+                cite, text = format_passages([h], question=question)[0]
                 renames[x] = tag
                 lines = [f"[{tag}] ({cite}) {text}"]
                 sources.append({"tag": tag, "kind": "retrieved passage", "cite": cite, "text": text})

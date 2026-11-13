@@ -113,12 +113,17 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
 
     from src.chunking import chunk_texts, strip_boilerplate
     doc = Document(doc_id=doc_id, text=text, metadata={"title": title})
-    # Cut where the layout changes (sections, entries), not every N tokens; pieces that are still
-    # too long for the extractor go through the sentence splitter.
+    # Repeated page headers/footers/legends are removed first. CHUNKING=layout cuts where the layout
+    # changes (sections, entries); the default cuts every ~512 tokens, which retrieved better with bge-m3
+    # in the Walid eval (layout chunks: 7/15 simple facts vs 13/15).
     splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-    pieces = []
-    for part in chunk_texts(strip_boilerplate(text)):
-        pieces += splitter.split_text(part) if len(part) > CHUNK_SIZE * 4 else [part]
+    clean = strip_boilerplate(text)
+    if config.CHUNKING == "layout":
+        pieces = []
+        for part in chunk_texts(clean):
+            pieces += splitter.split_text(part) if len(part) > CHUNK_SIZE * 4 else [part]
+    else:
+        pieces = splitter.split_text(clean)
     chunks = [TextNode(id_=_chunk_id(i, doc), text=t, metadata={"title": title}) for i, t in enumerate(pieces)]
     hint = extraction_hint(schema, corpus["name"], corpus.get("description", ""))
     # Layout chunks are short: a project's chunk doesn't repeat the person's name at the top of the CV.
@@ -724,9 +729,38 @@ def resolve_corpus(corpus_id: str, schema: dict) -> dict:
                     RETURN 1""", keep=keep, dups=dups).consume()
                 stats["merged"] += len(dups)
             s.run("MATCH (e:DocEntity {corpus: $c})-[r]->(e) WHERE type(r) <> 'MENTIONS' DELETE r", c=corpus_id).consume()
+            # "Persönliches Projekt" (from "Persönliches Projekt | GitHub") is a label, not a project
+            labels = [r["id"] for r in s.run("""
+                MATCH (e:DocEntity {corpus: $c})
+                RETURN elementId(e) AS id, e.name AS name, [l IN labels(e) WHERE l <> 'DocEntity'][0] AS type""",
+                c=corpus_id) if is_type_label(r["name"], r["type"])]
+            if labels:
+                s.run("MATCH (e) WHERE elementId(e) IN $ids DETACH DELETE e", ids=labels).consume()
+            stats["type_labels_removed"] = len(labels)
     finally:
         d.close()
     return stats
+
+
+# Words that only qualify a type ("personal project", "eigenes Projekt", "side project").
+_GENERIC_MODIFIERS = set("""personal persönlich persönliches persönlicher private privates eigenes eigene own side
+university universitäts hochschul student studentisches team group gruppen school schul course kurs academic
+akademisches other weitere new neues current aktuelles various verschiedene""".split())
+_TYPE_WORDS = {
+    "PROJECT": {"project", "projekt", "projet", "projects", "projekte"},
+    "ORGANIZATION": {"company", "firma", "unternehmen", "organization", "organisation"},
+    "SKILL": {"skill", "skills", "kenntnisse", "fähigkeiten"},
+    "COURSE": {"course", "kurs", "modul", "module"},
+    "ROLE": {"role", "rolle", "position", "job"},
+}
+
+
+def is_type_label(name: str, type_: str | None) -> bool:
+    """A name that is just a generic modifier plus the entity's own type word."""
+    words = re.findall(r"[^\W\d_]+", (name or "").lower())
+    kind = _TYPE_WORDS.get(type_ or "", set()) | {(type_ or "").lower()}
+    return 1 <= len(words) <= 2 and any(w in kind for w in words) and all(w in kind or w in _GENERIC_MODIFIERS
+                                                                         for w in words)
 
 
 if __name__ == "__main__":

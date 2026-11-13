@@ -116,3 +116,9 @@ def test_degree_words_beat_names_that_contain_them():
                  "STUDIUM M.Sc. Angewandte Informatik Hochschule Mainz 01.09.2024 – AKTUELL Mainz.")]
     (fact, _), = run_tools("How long has he been studying for his master's?", ev, None, ["duration"], TODAY)[0]
     assert "M.Sc." in fact and "Draft Master" not in fact
+
+
+def test_engineering_modules_are_not_work():
+    from src.tools.dates import _WORK
+    assert not _WORK.search("Module: Engineering von KI-Systemen B.Sc. Informatik")
+    assert _WORK.search("Praktikum als Softwareentwickler") and _WORK.search("Data Engineer, Berlin")

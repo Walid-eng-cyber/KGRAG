@@ -171,7 +171,20 @@ def meta() -> dict:
                      "consent_text": CONSENT_TEXT},
             "models": {"router": config.ROUTER_MODEL, "answer": config.ANSWER_MODEL,
                        "embed": config.EMBED_MODEL},
-            "billing": {"currency": config.BILLING_CURRENCY, "priced_as": config.BILLING_PRICE_AS or None}}
+            "billing": {"currency": config.BILLING_CURRENCY, "priced_as": config.BILLING_PRICE_AS or None},
+            "acting_as": _acting_as()}
+
+
+def _acting_as() -> dict | None:
+    """Who this sign-in-off server acts as (KGRAG_AS_USER): shown in the UI so each trial server is obvious."""
+    try:
+        u = auth.acting_user()
+    except HTTPException:
+        return None
+    if u is None:
+        return None
+    acct = auth.settings.store.get_account(u["account_id"]) if u.get("account_id") else None
+    return {"email": u["email"], "name": u["name"], "account": acct["name"] if acct else None}
 
 
 @app.post("/api/auth/signup")
@@ -318,7 +331,7 @@ def ask(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> dict
     corpus = None
     if req.corpus_id:
         corpus = _own_corpus(req.corpus_id, user)
-    elif auth.settings.enabled:
+    elif auth.settings.enabled or auth.settings.as_user:
         # With accounts on, every question must name one of the asker's corpora:
         # the unscoped legacy graph could otherwise reach other users' entities.
         raise HTTPException(status_code=400, detail="Choose a corpus to ask in.")
@@ -337,7 +350,7 @@ def ask(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> dict
 
 
 def _account_of(email: str | None) -> str | None:
-    if not email or not auth.settings.enabled:
+    if not email:
         return None
     u = auth.settings.store.get(email)
     return u.get("account_id") if u else None
@@ -403,8 +416,10 @@ def _record_ingest(doc: dict, m: meter.Meter, out: dict | None, text: str, laten
         m.calls.append(meter.LLMCall("extract", config.EXTRACT_MODEL, est["input_tokens"],
                                      est["output_tokens"], latency_s * 1000, estimated=True))
     usage_store.record(
-        kind="ingest", outcome="ok" if out is not None else "failed", account_id=_account_of(doc.get("owner")),
-        user_email=doc.get("owner"), corpus_id=doc.get("corpus_id"), requests=m.requests, tokens_in=m.tokens_in,
+        kind="ingest", outcome="ok" if out is not None else "failed",
+        account_id=(corpus_store.get(doc.get("corpus_id") or "") or {}).get("account_id")
+        or _account_of(doc.get("uploaded_by")),
+        user_email=doc.get("uploaded_by"), corpus_id=doc.get("corpus_id"), requests=m.requests, tokens_in=m.tokens_in,
         tokens_out=m.tokens_out, cost_usd=m.cost_usd, cost_eur=m.cost_eur, priced_as=m.priced_as,
         estimated=m.estimated, latency_ms=latency_s * 1000,
         units=(out or {}).get("chunks"), stages=m.stages())
@@ -417,8 +432,13 @@ def _owner(user: dict | None) -> str | None:
     return user["email"] if user else None
 
 
+def _account(user: dict | None) -> str | None:
+    """The client account whose shared workspace this user works in, if they belong to one."""
+    return user.get("account_id") if user else None
+
+
 def _own_corpus(corpus_id: str, user: dict | None) -> dict:
-    c = corpus_store.visible(corpus_id, _owner(user))
+    c = corpus_store.visible(corpus_id, _owner(user), _account(user))
     if c is None:   # private: someone else's corpus is indistinguishable from a missing one
         raise HTTPException(status_code=404, detail="No such corpus.")
     return c
@@ -431,7 +451,7 @@ def _corpus_view(c: dict) -> dict:
 
 @app.get("/api/corpora")
 def list_corpora(user: dict | None = Depends(auth.require_user)) -> dict:
-    return {"corpora": [_corpus_view(c) for c in corpus_store.list_for(_owner(user))],
+    return {"corpora": [_corpus_view(c) for c in corpus_store.list_for(_owner(user), _account(user))],
             "presets": {k: {"label": v["label"], "description": v["description"],
                             **corpus_schema.from_preset(k)} for k, v in corpus_schema.PRESETS.items()}}
 
@@ -445,7 +465,7 @@ def create_corpus(body: CorpusBody, user: dict | None = Depends(auth.require_use
             schema = corpus_schema.from_preset(body.preset or "general")
     except corpus_schema.SchemaError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    c = corpus_store.create(body.name, body.description, "documents", schema, _owner(user))
+    c = corpus_store.create(body.name, body.description, "documents", schema, _owner(user), account_id=_account(user))
     return {"corpus": _corpus_view(c)}
 
 
@@ -540,10 +560,31 @@ def ingest_documents(corpus_id: str, user: dict | None = Depends(auth.require_us
     return {"queued": queued}
 
 
+MAX_VIEW_CHARS = 200_000   # the viewer shows at most this much of a document; the rest stays in the corpus
+
+
+@app.get("/api/documents/{doc_id}")
+def get_document(doc_id: str, user: dict | None = Depends(auth.require_user)) -> dict:
+    """A document's text, for the viewer. Same visibility as the corpus it is in."""
+    doc = doc_store.get(doc_id)
+    if doc is None or not doc.get("corpus_id") or \
+            corpus_store.visible(doc["corpus_id"], _owner(user), _account(user)) is None:
+        raise HTTPException(status_code=404, detail="No such document.")
+    try:
+        text = docs.extract_text(doc_store.path(doc), doc["kind"])
+    except (docs.DocumentError, OSError) as e:
+        raise HTTPException(status_code=422, detail="This document's text couldn't be read.") from e
+    shown = text[:MAX_VIEW_CHARS]
+    keys = ("id", "corpus_id", "title", "filename", "kind", "size_bytes", "status", "chunks", "uploaded_at",
+            "ingested_at")
+    return {"document": {k: doc.get(k) for k in keys}, "text": shown, "chars": len(text),
+            "truncated": len(text) > len(shown)}
+
+
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: str, user: dict | None = Depends(auth.require_user)) -> dict:
     doc = doc_store.get(doc_id)
-    if doc is None or not doc.get("corpus_id") or corpus_store.visible(doc["corpus_id"], _owner(user)) is None:
+    if doc is None or not doc.get("corpus_id") or corpus_store.visible(doc["corpus_id"], _owner(user), _account(user)) is None:
         raise HTTPException(status_code=404, detail="No such document.")
     if doc["status"] in ("queued", "ingesting"):
         raise HTTPException(status_code=409, detail="Wait for ingestion to finish before removing it.")

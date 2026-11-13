@@ -129,13 +129,20 @@ export default function App() {
               : page === "usage" ? <>Clients <b>/ usage, cost and credit per account</b></>
               : <>Benchmark <b>/ GraphRAG vs plain vector RAG</b></>}
           </div>
+          <div className="pills">
+          {meta?.acting_as && (
+            <span className="pill acting" title={meta.acting_as.email}>
+              {meta.acting_as.account ?? "No account"} · {meta.acting_as.name}
+            </span>
+          )}
           {meta?.demo ? <span className="pill demo">Demo mode · sample data</span>
             : meta?.billing?.priced_as
               ? <span className="pill local" title="Models run on-device; usage is priced as if a hosted provider answered">
                   On-device · priced as {meta.billing.priced_as}</span>
               : <span className="pill local">All models on-device · $0 per query</span>}
+          </div>
         </div>
-        {page === "usage" && (user?.role === "admin" || (meta && !meta.auth.enabled)) ? <UsagePage />
+        {page === "usage" && (user?.role === "admin" || (meta && !meta.auth.enabled && !meta.acting_as)) ? <UsagePage />
           : page === "admin" && user?.role === "admin" ? <AdminPage me={user} />
           : page === "benchmark" ? <BenchmarkPage />
           : <AskPage key={corpus?.id ?? "none"} meta={meta} corpus={corpus} profile={profile} onNewCorpus={() => setDialog("new")} />}

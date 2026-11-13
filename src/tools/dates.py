@@ -303,9 +303,11 @@ def timeline(question, evidence, graph, today):
     return out
 
 
-_WORK = re.compile(r"praktikum|werkstudent|mitarbeiter|intern|job|entwickler|developer|engineer|employee|"
-                   r"hilfskraft|assistant|assistent|researcher|manager|lead|"
-                   r"consultant|analyst|berater|angestellt|stelle|position|work", re.I)
+# Job words. English ones must be whole words ("engineer" is not "Engineering von KI-Systemen");
+# German ones may end a compound ("Softwareentwickler", "Werkstudentin").
+_WORK = re.compile(r"(?:praktik|werkstudent|mitarbeiter|entwickler|hilfskraft|angestellt|berater|referent)\w*|"
+                   r"\b(?:intern|internship|job|developer|engineer|employee|assistant|researcher|manager|lead|"
+                   r"consultant|analyst|stelle|position|work|worked|working|stagiaire|stage)\b", re.I)
 
 
 def experience(question, evidence, graph, today):

@@ -223,7 +223,7 @@ def test_retry_narration_is_never_shown():
 def test_keyword_query_and_rank_fusion():
     from src.vectorize import _kw_query, fuse
     q = _kw_query("What was the title of Walid's bachelor thesis?")
-    assert q.startswith("title:* | walid:* | bachelor:*") and "bachelorarbeit:*" in q      # synonyms added
+    assert q.startswith("titl:* | walid:* | bachelor:*") and "bachelorarbeit:*" in q      # stems + synonyms
     assert "bachelor:*" in _kw_query("Wo hat er seinen Bachelor gemacht?")
     assert _kw_query("is it?") is None
     a, b, c = ({"chunk_id": x} for x in "abc")
@@ -238,3 +238,42 @@ def test_bm25_ignores_words_every_chunk_has():
     s = bm25("walid thesis", docs, 3, {"walid": 3, "thesis": 0, "bachelorarbeit": 1, "arbeit": 1,
                                          "masterarbeit": 0})
     assert s.index(max(s)) == 2 and max(s[0], s[1]) < s[2] / 5    # the name alone barely counts
+
+
+def test_type_labels_are_not_entities():
+    assert corpus_graph.is_type_label("Persönliches Projekt", "PROJECT")
+    assert corpus_graph.is_type_label("Side project", "PROJECT") and corpus_graph.is_type_label("Projekt", "PROJECT")
+    assert not corpus_graph.is_type_label("Room Booking", "PROJECT")
+    assert not corpus_graph.is_type_label("Project Apollo", "PROJECT")
+    assert not corpus_graph.is_type_label("NBA-Bewertungsvorhersage – ML-Projekt", "PROJECT")
+    assert not corpus_graph.is_type_label("Persönliches Projekt", "SKILL")
+
+
+def test_long_passages_show_the_part_that_matches_the_question():
+    from src.answer import best_window
+    text = "Intro " * 300 + "Mitautoren: Mahmoud Eslami, Ali Sayyadi. " + "Outro " * 100
+    w = best_window(text, "Who are the co-authors (Mitautoren) of the publication?", 300)
+    assert "Eslami" in w and w.startswith("…") and len(w) <= 302
+    assert best_window("short", "anything", 300) == "short"
+
+
+def test_near_duplicate_chunks_take_one_slot():
+    from src.vectorize import diversify
+    cv = "Walid Beladdad Masterstudent Angewandte Informatik Projekte Room Booking Docker React TypeScript"
+    rows = [{"chunk_id": "a", "text": cv}, {"chunk_id": "b", "text": cv + " Seite"},
+            {"chunk_id": "c", "text": "Sprachen Arabisch Muttersprache Deutsch C1 Englisch Französisch"}]
+    assert [r["chunk_id"] for r in diversify(rows, 2)] == ["a", "c"]
+
+
+def test_language_is_detected_from_function_words():
+    from src.vectorize import language
+    assert language("What did he achieve in the competition and with which team?") == "en"
+    assert language("Was hat er im Turnen erreicht und mit der Mannschaft gewonnen?") == "de"
+    assert language("Quel est le diplôme de la personne et où est-il?") == "fr"
+    assert language("Python FastAPI Neo4j") is None
+
+
+def test_stems_let_prefixes_match_other_word_forms():
+    from src.vectorize import stem
+    assert stem("turnens") == "turn" and stem("deutschen") == "deutsch" and stem("projects") == "project"
+    assert stem("python") == "python" and stem("ects") == "ects"

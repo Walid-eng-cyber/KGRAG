@@ -40,7 +40,7 @@ export function Sidebar({ page, onNavigate, meta, health, user, onSignOut, onTog
   onSelectCorpus, onNewCorpus, onEditCorpus, onCorpusChanged }: Props) {
   // The benchmark compares GraphRAG with vector RAG on SEC filings: only shown for the SEC corpus.
   // Clients & usage is the operator's view: admins, or anyone on a local setup with sign-in off.
-  const operator = user?.role === "admin" || (meta != null && !meta.auth.enabled && !meta.demo);
+  const operator = user?.role === "admin" || (meta != null && !meta.auth.enabled && !meta.demo && !meta.acting_as);
   const pages: Page[] = ["ask", ...(corpus?.kind === "sec_insiders" ? ["benchmark" as Page] : []),
     ...(user?.role === "admin" ? ["admin" as Page] : []), ...(operator ? ["usage" as Page] : [])];
   return (

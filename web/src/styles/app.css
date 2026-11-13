@@ -393,7 +393,11 @@ table.accounts .actions .btn { padding: 6px 12px; font-size: 12px; margin-left: 
 .docs-actions .btn { flex: 1; padding: 7px 10px; font-size: 12px; }
 .docs-hint { padding: 0 10px; font-size: 11px; color: var(--muted-2); line-height: 1.4; }
 .docs-error { margin: 0 10px; padding: 8px 10px; border-radius: 7px; background: #fdf6f4; border: 1px solid #f0cfc7; color: #7a2f1f; font-size: 12px; }
-@media (max-width: 900px) { .side .docs { display: none; } }
+/* Narrow screens: the sidebar becomes a top bar, but the documents stay listed, full width underneath. */
+@media (max-width: 900px) {
+  .side .docs { flex: 1 1 100%; order: 10; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .side .docs-list { max-height: 220px; }
+}
 
 /* ---------- corpora ---------- */
 .corpus-switch { display: flex; flex-direction: column; gap: 6px; }
@@ -518,3 +522,19 @@ table.accounts.compact td, table.accounts.compact th { padding-top: 6px; padding
 .usage td, .usage th { white-space: nowrap; }
 .usage td.mono-cell { white-space: normal; word-break: break-all; min-width: 200px; }
 @media (max-width: 900px) { .usage td, .usage th { padding-left: 12px; padding-right: 12px; } }
+.pill.acting { color: var(--graph-ink); background: var(--graph-bg); border: 1px solid var(--graph-border); font-weight: 600; margin-right: 8px; }
+.pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.pill.acting { margin-right: 0; }
+
+/* ---------- document viewer (components/DocumentViewer.tsx) ---------- */
+.doc-open { border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: inherit; text-align: left; cursor: pointer; }
+.doc-open:hover { text-decoration: underline; text-underline-offset: 3px; }
+.doc-modal { max-width: 760px; height: min(720px, calc(100vh - 32px)); }
+.doc-modal:focus { outline: none; }
+.doc-modal-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.doc-modal-title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-meta { font-size: 12px; color: var(--muted); }
+.doc-modal-b { flex: 1; min-height: 0; gap: 12px; }
+.doc-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
+.doc-page-break { font-size: 11px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted-2);
+  border-top: 1px solid var(--border); padding-top: 10px; margin: 6px 0 10px; }

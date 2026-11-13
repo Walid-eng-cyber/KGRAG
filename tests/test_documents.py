@@ -188,6 +188,29 @@ def test_corpora_are_private_to_their_owner(store, accounts):
     assert accounts("boss").get("/api/corpora").json()["corpora"] == []   # admins don't see others' corpora either
 
 
+def test_a_document_can_be_read_by_its_owner_and_nobody_else(store, accounts):
+    ann, bob = accounts("ann"), accounts("bob")
+    cid = new_corpus(ann, "Ann's notes")
+    doc = upload(ann, cid, name="cv.txt", data=b"Elodie Marchand, data engineer in Lyon. " * 8, title="Elodie CV").json()["document"]
+    r = ann.get(f"/api/documents/{doc['id']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["document"]["title"] == "Elodie CV" and body["document"]["filename"] == "cv.txt"
+    assert body["text"].startswith("Elodie Marchand, data engineer in Lyon.") and body["truncated"] is False
+    assert bob.get(f"/api/documents/{doc['id']}").status_code == 404          # someone else's
+    assert ann.get("/api/documents/DOC-nope").status_code == 404              # missing looks the same
+    assert TestClient(main.app).get(f"/api/documents/{doc['id']}").status_code == 401
+
+
+def test_a_long_document_is_cut_for_the_viewer_and_says_so(store, accounts, monkeypatch):
+    monkeypatch.setattr(main, "MAX_VIEW_CHARS", 50)
+    ann = accounts("ann")
+    cid = new_corpus(ann)
+    doc = upload(ann, cid, data=b"abcdefghij " * 20).json()["document"]
+    body = ann.get(f"/api/documents/{doc['id']}").json()
+    assert len(body["text"]) == 50 and body["truncated"] is True and body["chars"] > 50
+
+
 def test_signed_in_questions_must_name_a_corpus(store, accounts):
     r = accounts("ann").post("/api/ask", json={"question": "What is in my documents?"})
     assert r.status_code == 400 and "corpus" in r.json()["detail"]

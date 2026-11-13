@@ -1,7 +1,10 @@
 """Corpora: private collections of documents, each with its own profile and schema.
 
-Every corpus belongs to one user and is visible only to them (on a local setup
-with sign-in off there is a single implicit user, `owner = NULL`).
+A corpus created by a user who belongs to a client account is a shared workspace: it
+carries that account's id, and every user of the account sees and manages it while
+nobody outside the account can. A corpus created by a user without an account stays
+private to its owner (on a local setup with sign-in off there is a single implicit
+user, `owner = NULL`).
 
 kind:
   documents     uploaded files, extracted with the corpus's own schema
@@ -26,7 +29,8 @@ CREATE TABLE IF NOT EXISTS corpora (
     kind        TEXT NOT NULL CHECK (kind IN ('documents','sec_insiders')),
     schema_json TEXT NOT NULL,
     owner       TEXT,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    account_id  TEXT
 );
 """
 
@@ -43,6 +47,9 @@ class CorpusStore:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(_SCHEMA)
+            cols = {r["name"] for r in self._db.execute("PRAGMA table_info(corpora)")}
+            if "account_id" not in cols:   # databases from before client accounts
+                self._db.execute("ALTER TABLE corpora ADD COLUMN account_id TEXT")
             self._db.commit()
 
     @staticmethod
@@ -55,27 +62,44 @@ class CorpusStore:
         r = self._db.execute("SELECT * FROM corpora WHERE id = ?", (corpus_id,)).fetchone()
         return self._row(r) if r else None
 
-    def list_for(self, owner: str | None) -> list[dict]:
-        """Corpora this user can see: their own (always private)."""
+    def list_for(self, owner: str | None, account_id: str | None = None) -> list[dict]:
+        """Corpora this user can see: their client account's, plus their own private ones."""
+        conds, args = [], []
+        if account_id:
+            conds.append("account_id = ?")
+            args.append(account_id)
         if owner is None:
-            rows = self._db.execute("SELECT * FROM corpora WHERE owner IS NULL ORDER BY created_at").fetchall()
+            conds.append("(owner IS NULL AND account_id IS NULL)")
         else:
-            rows = self._db.execute("SELECT * FROM corpora WHERE owner = ? ORDER BY created_at", (owner,)).fetchall()
-        return [self._row(r) for r in rows]
+            conds.append("(owner = ? AND account_id IS NULL)")
+            args.append(owner)
+        rows = self._db.execute(f"SELECT * FROM corpora WHERE {' OR '.join(conds)} ORDER BY created_at", args)
+        return [self._row(r) for r in rows.fetchall()]
 
-    def visible(self, corpus_id: str, owner: str | None) -> dict | None:
+    def visible(self, corpus_id: str, owner: str | None, account_id: str | None = None) -> dict | None:
         c = self.get(corpus_id)
-        return c if c and c["owner"] == owner else None
+        if c is None:
+            return None
+        if c["account_id"]:
+            return c if c["account_id"] == account_id else None
+        return c if c["owner"] == owner else None
+
+    def assign(self, corpus_id: str, account_id: str | None) -> None:
+        """Move a corpus into a client account's shared workspace (None makes it private to its owner again)."""
+        with self._lock:
+            self._db.execute("UPDATE corpora SET account_id = ? WHERE id = ?", (account_id, corpus_id))
+            self._db.commit()
 
     def create(self, name: str, description: str, kind: str, schema: dict, owner: str | None,
-               corpus_id: str | None = None) -> dict:
+               corpus_id: str | None = None, account_id: str | None = None) -> dict:
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
         cid = corpus_id or "c_" + secrets.token_hex(5)
         with self._lock:
-            self._db.execute("INSERT INTO corpora (id, name, description, kind, schema_json, owner, created_at) "
-                             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                             (cid, name.strip()[:80], description.strip()[:500], kind, json.dumps(schema), owner, _now()))
+            self._db.execute("INSERT INTO corpora (id, name, description, kind, schema_json, owner, created_at, account_id) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (cid, name.strip()[:80], description.strip()[:500], kind, json.dumps(schema), owner, _now(),
+                              account_id))
             self._db.commit()
         return self.get(cid)  # type: ignore[return-value]
 

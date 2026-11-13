@@ -141,6 +141,15 @@ export interface DocumentInfo {
   ingested_at: string | null;
 }
 
+/** A document's text for the viewer (GET /api/documents/{id}). */
+export interface DocumentContent {
+  document: Pick<DocumentInfo, "id" | "corpus_id" | "title" | "filename" | "kind" | "size_bytes" | "status" | "chunks"
+    | "uploaded_at" | "ingested_at">;
+  text: string;
+  chars: number;
+  truncated: boolean;
+}
+
 export interface Example {
   label: string;
   path: RoutePath;
@@ -173,6 +182,8 @@ export interface Meta {
   corpus?: { label: string; detail: string }[];
   models: { router: string; answer: string; embed: string };
   billing?: { currency: string; priced_as: string | null };
+  /** Set on a sign-in-off server that acts as one client user (KGRAG_AS_USER). */
+  acting_as?: { email: string; name: string; account: string | null } | null;
 }
 
 export interface ServiceStatus {

@@ -1,6 +1,6 @@
 import type {
   Account, AccountOverview, AccountStatus, AskResponse, Benchmark, Billing, ClientAccount, Corpus, CorpusInput,
-  CorpusProfile, DocumentInfo, Health, Meta, Preset, UsageReport, User,
+  CorpusProfile, DocumentContent, DocumentInfo, Health, Meta, Preset, UsageReport, User,
 } from "./types";
 
 export class ApiError extends Error {
@@ -67,6 +67,7 @@ export const api = {
   },
   ingestDocuments: (corpusId: string) =>
     request<{ queued: string[] }>(`/api/corpora/${encodeURIComponent(corpusId)}/ingest`, { method: "POST" }),
+  documentContent: (id: string) => request<DocumentContent>(`/api/documents/${encodeURIComponent(id)}`),
   deleteDocument: (id: string) => request<{ ok: boolean }>(`/api/documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   adminUsers: (status?: AccountStatus) =>
     request<{ users: Account[] }>(`/api/admin/users${status ? `?status=${status}` : ""}`),

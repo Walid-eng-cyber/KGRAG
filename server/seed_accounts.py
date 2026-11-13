@@ -218,7 +218,10 @@ def seed(users, corpora, usage, days: int = 0, now: datetime | None = None, seed
         cid = f"c_seed_{spec['id'].removeprefix('acct_')}"
         if corpora.get(cid) is None:
             title, desc, preset = spec["corpus"]
-            corpora.create(title, desc, "documents", corpus_schema.from_preset(preset), emails[0], corpus_id=cid)
+            corpora.create(title, desc, "documents", corpus_schema.from_preset(preset), emails[0], corpus_id=cid,
+                           account_id=spec["id"])
+        else:
+            corpora.assign(cid, spec["id"])   # a shared workspace: every member of the client sees it
         usage.delete_source(SEED_SOURCE, spec["id"])
         rows = generate(spec, cid, days, now, rng) if days > 0 else []
         usage.record_many(rows)

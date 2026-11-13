@@ -51,6 +51,12 @@ class Settings:
             raise RuntimeError("COOKIE_SAMESITE must be lax, strict or none.")
         if self.cookie_samesite == "none" and not self.cookie_secure:
             raise RuntimeError("COOKIE_SAMESITE=none requires COOKIE_SECURE=1 (HTTPS); browsers drop it otherwise.")
+        # Local trials of one client's view: with sign-in off, act as this (approved) user, so the
+        # questions, corpora and usage belong to their client account. Never combined with sign-in.
+        self.as_user = env.get("KGRAG_AS_USER", "").strip().lower()
+        if self.as_user and self.client_id:
+            raise RuntimeError("KGRAG_AS_USER only works with sign-in off (leave GOOGLE_CLIENT_ID empty); "
+                               "with sign-in on, people are identified by their Google account.")
         self.rate_per_min = int(env.get("RATE_LIMIT_PER_MIN", "10"))
         self.users_db = env.get("USERS_DB", str(_DEFAULT_DB))
         self.enabled = bool(self.client_id)
@@ -162,10 +168,20 @@ def current_user(request: Request) -> dict | None:
     return user if user and user["status"] == "approved" else None
 
 
-def require_user(request: Request) -> dict | None:
-    """FastAPI dependency: 401 unless signed in. A no-op when auth is disabled."""
-    if not settings.enabled:
+def acting_user() -> dict | None:
+    """The user a sign-in-off server acts as (KGRAG_AS_USER), or None. 503 if that user can't be used."""
+    if settings.enabled or not settings.as_user:
         return None
+    user = settings.store.get(settings.as_user)
+    if user is None or user["status"] != "approved":
+        raise HTTPException(status_code=503, detail=f"KGRAG_AS_USER={settings.as_user} isn't an approved account.")
+    return user
+
+
+def require_user(request: Request) -> dict | None:
+    """FastAPI dependency: 401 unless signed in. With sign-in off: the KGRAG_AS_USER user, or nobody."""
+    if not settings.enabled:
+        return acting_user()
     user = current_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in to use KGRAG.")
@@ -188,6 +204,9 @@ def require_operator(request: Request) -> dict | None:
     With sign-in off (a local, single-user setup where every route is already open) the
     operator is whoever runs the server, so the views are open too."""
     if not settings.enabled:
+        if settings.as_user:
+            raise HTTPException(status_code=403, detail="This server shows one client's view; the operator views "
+                                                        "are on the main server.")
         return None
     return require_admin(request)
 
