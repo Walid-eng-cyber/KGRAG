@@ -174,6 +174,25 @@ def retrieve(query: str, k: int = 5, corpus_id: str | None = None) -> list[dict]
     return rows
 
 
+def chunks_matching(corpus_id: str, pattern: str, limit: int = 40) -> list[dict]:
+    """All chunks of one corpus whose text matches a POSIX regex (case-insensitive).
+    Used by the answer tools, which need every dated passage, not just the top-k similar ones."""
+    conn = pg_connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT chunk_id, doc_id, section_path, filing_date, text, entity_ids, 0.0 AS similarity
+            FROM chunk_embeddings WHERE corpus_id = %s AND text ~* %s
+            ORDER BY doc_id, chunk_id LIMIT %s;
+            """,
+            (corpus_id, pattern, limit),
+        )
+        cols = ["chunk_id", "doc_id", "section_path", "filing_date", "text", "entity_ids", "similarity"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
 def search(query: str, k: int = 5) -> None:
     print(f"\nTop {k} chunks for: {query!r}\n" + "-" * 60)
     for r in retrieve(query, k):

@@ -9,7 +9,7 @@ export type Inline =
 
 export type Block = { kind: "p"; inlines: Inline[] } | { kind: "ul"; items: Inline[][] };
 
-const TOKEN = /\*\*(.+?)\*\*|\[((?:G|P)\d+)\]/g;
+const TOKEN = /\*\*(.+?)\*\*|\[((?:G|P|C)\d+)\]/g;
 
 export function parseInline(text: string): Inline[] {
   const out: Inline[] = [];
@@ -41,4 +41,5 @@ export function parseAnswer(text: string): Block[] {
   return blocks;
 }
 
-export const tagKind = (tag: string): "graph" | "passage" => (tag.startsWith("G") ? "graph" : "passage");
+export const tagKind = (tag: string): "graph" | "passage" | "computed" =>
+  tag.startsWith("G") ? "graph" : tag.startsWith("C") ? "computed" : "passage";

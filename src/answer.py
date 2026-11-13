@@ -13,11 +13,14 @@ and traceable back to the graph / the source chunk.
 from __future__ import annotations
 
 import re
+from datetime import date
 
 import ollama
 
 import config
 from src.router import route
+from src.skills import skill_for
+from src.tools import run_tools, scan_patterns
 
 # Relationship -> readable phrase, for verbalizing paths.
 REL_PHRASE = {
@@ -191,6 +194,7 @@ def graph_triples(g: dict) -> list[tuple[str, str, str]]:
     return [(s, r, t) for s, r, t, _ in graph_edges(g)]
 
 
+MAX_PROMOTED = 4   # chunks found by a tool's corpus scan that may be added as passages
 PASSAGE_CHARS = 1200  # enough of each chunk (512 tokens ~ 2,000 chars) to hold its key facts
 
 
@@ -221,7 +225,7 @@ def _dedup_passages(vs: list[dict], graph_src_chunks: set[str] | None = None) ->
     return out
 
 
-_CITE = re.compile(r"\[(G\d+|P\d+)\]")
+_CITE = re.compile(r"\[(G\d+|P\d+|C\d+)\]")
 
 
 def validate_citations(text: str, valid_tags: set[str]) -> tuple[list[str], list[str]]:
@@ -252,7 +256,23 @@ def _corrective(valid_tags: set[str], invalid: list[str], uncited: list[str]) ->
     return " ".join(msg)
 
 
-def answer(question: str, corpus: dict | None = None) -> dict:
+def _scan_corpus(question: str, corpus: dict | None, skill: dict, have: set[str]) -> list[dict]:
+    """Every chunk of a document corpus that the triggered tools need (e.g. all dated passages)."""
+    if not corpus or corpus.get("kind") != "documents":
+        return []
+    pats = scan_patterns(question, skill["tools"])
+    if not pats:
+        return []
+    try:
+        from src.vectorize import chunks_matching
+        rows = chunks_matching(corpus["id"], "|".join(f"({p})" for p in pats))
+    except Exception:  # noqa: BLE001 — the scan is a bonus; answer from retrieval alone
+        return []
+    return [r for r in rows if r["chunk_id"] not in have]
+
+
+def answer(question: str, corpus: dict | None = None, today: date | None = None) -> dict:
+    today = today or date.today()
     routed = route(question, corpus)
     res = routed["result"]
     graph_result = res.get("graph", {}) if "graph" in res else {}
@@ -288,12 +308,53 @@ def answer(question: str, corpus: dict | None = None) -> dict:
             sources.append({"tag": tag, "kind": "retrieved passage", "cite": cite, "text": text})
         blocks.append("RETRIEVED PASSAGES (from vector search):\n" + "\n".join(lines))
 
+    # Calculations over the evidence (ages, durations, totals, ...) are done by tools, not the model.
+    skill = skill_for(corpus)
+    extra = _scan_corpus(question, corpus, skill, {h["chunk_id"] for h in vhits[:len(passages)]})
+    evidence = [(s["tag"], s["text"]) for s in sources] + \
+               [(f"X{i + 1}", " ".join(h["text"].split())) for i, h in enumerate(extra)]
+    computed, tools_used = run_tools(question, evidence, graph_result, skill["tools"], today)
+    # A fact built from a scanned chunk makes that chunk a real, citable passage [Pn].
+    vhits = vhits[:len(passages)]
+    renames: dict[str, str] = {}
+    for stmt, base in computed:
+        for x in dict.fromkeys(re.findall(r"\[(X\d+)\]", stmt) + ([base] if base.startswith("X") else [])):
+            if x not in renames and len(renames) < MAX_PROMOTED:
+                h = extra[int(x[1:]) - 1]
+                tag = f"P{len(vhits) + 1}"
+                vhits.append(h)
+                cite, text = format_passages([h])[0]
+                renames[x] = tag
+                lines = [f"[{tag}] ({cite}) {text}"]
+                sources.append({"tag": tag, "kind": "retrieved passage", "cite": cite, "text": text})
+                if blocks and blocks[-1].startswith("RETRIEVED PASSAGES"):
+                    blocks[-1] += "\n" + lines[0]
+                else:
+                    blocks.append("RETRIEVED PASSAGES (from vector search):\n" + lines[0])
+    # Over the cap, the extra chunk isn't shown: drop its tag (the computed fact still stands).
+    first = next(iter(renames.values()), "C1")
+    computed = [(re.sub(r"\s*\[(X\d+)\]", lambda m: f" [{renames[m[1]]}]" if m[1] in renames else "", s),
+                 renames.get(b, first) if b.startswith("X") else b) for s, b in computed]
+    if computed:
+        lines = []
+        for i, (stmt, base) in enumerate(computed):
+            tag = f"C{i+1}"
+            lines.append(f"[{tag}] {stmt}")
+            sources.append({"tag": tag, "kind": "computed fact", "text": stmt, "based_on": base})
+        blocks.insert(0, "COMPUTED FACTS (calculated exactly from the sources):\n" + "\n".join(lines))
+
     context = "\n\n".join(blocks)
     valid_tags = {s["tag"] for s in sources}
     system = (
-        "You answer questions using ONLY the sources below. There are two kinds: "
-        "GRAPH-DERIVED FACTS (structured, labeled [G1], [G2], ...) and RETRIEVED "
-        "PASSAGES (text, labeled [P1], [P2], ...). Prefer graph-derived facts for counts "
+        f"Today is {today:%A, %d %B %Y}. "
+        "You answer questions using ONLY the sources below: COMPUTED FACTS ([C1], ...: "
+        "exact calculations such as ages; when one answers the question, state its result "
+        "directly and cite it, copying the value exactly as written: never round, convert or "
+        "recompute it, e.g. keep '2 years 9 months', don't make it '3 years'), GRAPH-DERIVED FACTS (structured, labeled [G1], [G2], ...) and "
+        "RETRIEVED PASSAGES (text, labeled [P1], [P2], ...). Answer the question that was "
+        "asked: if it asks for an age, a duration or a number, give that value, not only "
+        "the raw date it comes from. " + (skill["guidance"] + " " if skill["guidance"] else "") +
+        "Prefer graph-derived facts for counts "
         "and relationships and passages for explanations. When a graph-derived fact "
         "states an exact number or a complete list, give that exact number and list "
         "every item; never write 'at least', 'about' or 'several' for it, and don't "
@@ -327,6 +388,7 @@ def answer(question: str, corpus: dict | None = None) -> dict:
             "answer": text, "graph_statements": graph_stmts, "sources": sources,
             "graph_result": graph_result, "vector_hits": vhits, "context": context,
             "attempts": attempts, "citations_valid": not invalid,
+            "skill": skill["label"], "tools_used": tools_used,
             "uncited_claims": uncited}
 
 

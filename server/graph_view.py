@@ -18,7 +18,7 @@ REL_TYPES: dict[str, tuple[str, str]] = {}
 for _subj, _rel, _obj in [*VALIDATION_SCHEMA, *STRUCTURED_RELATIONS]:
     REL_TYPES.setdefault(_rel, (_subj, _obj))
 
-_CITE = re.compile(r"\[(G\d+|P\d+)\]")
+_CITE = re.compile(r"\[(G\d+|P\d+|C\d+)\]")
 
 # query types whose verbalization is ONE statement covering every row ([G1]),
 # versus one statement per row ([G1], [G2], ...).

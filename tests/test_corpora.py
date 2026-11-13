@@ -196,3 +196,19 @@ def test_people_named_in_the_question_are_found_without_the_planner():
     assert corpus_graph.mentioned_people("what did Walid Beladdad study", people) == ["Walid Beladdad"]
     assert corpus_graph.mentioned_people("which courses did anna take", people) == []      # ambiguous
     assert corpus_graph.mentioned_people("how many projects are there", people) == []
+
+
+# ---------- facts computed in code ----------
+
+def test_age_is_computed_from_a_birth_date():
+    from datetime import date
+    from src.tools import run_tools
+    from src.tools.dates import parse_date
+    derived_facts = lambda q, ev, d: run_tools(q, ev, None, ["age"], d)[0]   # noqa: E731
+    today = date(2026, 11, 12)
+    for text in ("geboren am 06.05.2001", "Geburtsdatum: 06.05.2001", "born on May 6, 2001", "Born: 6 Mai 2001"):
+        facts = derived_facts("how old is walid ?", [("P1", f"Walid Beladdad, {text}, Mainz")], today)
+        assert facts and "25 years old" in facts[0][0] and facts[0][1] == "P1", text
+    assert "24 years old" in derived_facts("wie alt ist er", [("P2", "geboren am 13.11.2001")], today)[0][0]
+    assert derived_facts("where does walid live", [("P1", "geboren am 06.05.2001")], today) == []
+    assert parse_date("31.02.2001") is None

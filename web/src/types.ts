@@ -46,7 +46,7 @@ export interface GraphView {
 
 export interface Source {
   tag: string;
-  kind: "graph" | "passage";
+  kind: "graph" | "passage" | "computed";
   text: string;
   cite?: string | null;
 }

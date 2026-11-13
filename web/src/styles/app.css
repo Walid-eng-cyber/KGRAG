@@ -142,6 +142,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .cite.graph { background: var(--graph-bg); color: var(--graph-ink); }
 .cite.passage { background: var(--vector-bg); color: var(--vector); }
+.cite.computed { background: #f3effa; color: #5b3fa0; }
 .cite.invalid { background: #fbeae6; color: var(--bad); text-decoration: line-through; }
 .cite[aria-pressed="true"] { border-color: currentColor; }
 .valid { display: flex; align-items: center; gap: 10px; border-radius: 8px; padding: 10px 12px; font-size: 13px; }

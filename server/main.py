@@ -110,8 +110,9 @@ def shape_answer(raw: dict, latency_s: float, is_demo: bool = False) -> dict:
     """answer() output -> the JSON contract the React UI renders."""
     sources = []
     for s in raw.get("sources", []):
-        graph = s.get("kind", "").startswith("graph")
-        sources.append({"tag": s["tag"], "kind": "graph" if graph else "passage",
+        k = s.get("kind", "")
+        kind = "graph" if k.startswith("graph") else "computed" if k.startswith("computed") else "passage"
+        sources.append({"tag": s["tag"], "kind": kind,
                         "text": s.get("text", ""), "cite": s.get("cite")})
 
     # P1..Pn are the first deduped vector hits, in order (see src.answer.format_passages).
