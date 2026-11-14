@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseAnswer, parseInline } from "./answerText";
 import { citedSets, layoutGraph, STAGE } from "./layout";
+import { drainNdjson } from "./ndjson";
 import type { GraphView } from "../types";
 
 describe("answer text", () => {
@@ -75,5 +76,25 @@ describe("layout", () => {
     expect(edgeIds.size).toBe(2);
     expect(nodeIds.has("apple")).toBe(true);
     expect(citedSets(star.edges, ["P1"]).edgeIds.size).toBe(0);
+  });
+});
+
+describe("streaming events", () => {
+  it("reads complete lines and keeps the unfinished tail for the next chunk", () => {
+    const first = drainNdjson('{"type":"token","text":"Hel"}\n{"type":"token","text":"lo"}\n{"type":"tok');
+    expect(first.events).toEqual([{ type: "token", text: "Hel" }, { type: "token", text: "lo" }]);
+    expect(first.rest).toBe('{"type":"tok');
+    const second = drainNdjson(first.rest + 'en","text":"!"}\n');
+    expect(second.events).toEqual([{ type: "token", text: "!" }]);
+    expect(second.rest).toBe("");
+  });
+
+  it("skips blank and damaged lines instead of losing the answer", () => {
+    expect(drainNdjson('\n{"type":"reset"}\nnot json\n{"type":"done"}\n').events)
+      .toEqual([{ type: "reset" }, { type: "done" }]);
+  });
+
+  it("returns nothing for an empty buffer", () => {
+    expect(drainNdjson("")).toEqual({ events: [], rest: "" });
   });
 });

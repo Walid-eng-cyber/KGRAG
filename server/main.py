@@ -10,15 +10,19 @@ Set KGRAG_DEMO=1 to serve labelled sample answers without Neo4j/Postgres/Ollama.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import queue
+import re
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Literal
 
@@ -328,13 +332,7 @@ def ask(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> dict
     t0 = perf_counter()
     if DEMO:
         return shape_answer(demo.demo_answer(req.question), perf_counter() - t0, is_demo=True)
-    corpus = None
-    if req.corpus_id:
-        corpus = _own_corpus(req.corpus_id, user)
-    elif auth.settings.enabled or auth.settings.as_user:
-        # With accounts on, every question must name one of the asker's corpora:
-        # the unscoped legacy graph could otherwise reach other users' entities.
-        raise HTTPException(status_code=400, detail="Choose a corpus to ask in.")
+    corpus = _ask_corpus(req, user)
     with meter.meter() as m:
         try:
             from src.answer import answer
@@ -343,10 +341,82 @@ def ask(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> dict
             log.exception("answer() failed")
             _record_ask(user, req.corpus_id, m, None, perf_counter() - t0)
             raise HTTPException(status_code=503,
-                                detail="KGRAG couldn't answer right now: a backend service (Neo4j, Postgres or "
-                                       "Ollama) isn't available. The details are in the server log.") from e
+                                detail=_ANSWER_FAILED) from e
     _record_ask(user, req.corpus_id, m, raw, perf_counter() - t0)
     return shape_answer(raw, perf_counter() - t0)
+
+
+def _ask_corpus(req: AskRequest, user: dict | None) -> dict | None:
+    """The corpus a question is asked in (404 if it isn't the asker's). With accounts on, every question must
+    name one: the unscoped legacy graph could otherwise reach other users' entities."""
+    if req.corpus_id:
+        return _own_corpus(req.corpus_id, user)
+    if auth.settings.enabled or auth.settings.as_user:
+        raise HTTPException(status_code=400, detail="Choose a corpus to ask in.")
+    return None
+
+
+_ANSWER_FAILED = ("KGRAG couldn't answer right now: a backend service (Neo4j, Postgres or Ollama) "
+                  "isn't available. The details are in the server log.")
+
+
+@app.post("/api/ask/stream", dependencies=[Depends(auth.rate_limit)])
+def ask_stream(req: AskRequest, user: dict | None = Depends(auth.require_user)) -> StreamingResponse:
+    """Like /api/ask, but the answer arrives as it is written. The body is newline-delimited JSON events:
+      {"type":"route","path":"GRAPH","path_label":..., "confidence":...}   the path is chosen
+      {"type":"token","text":"..."}                                        a piece of the answer
+      {"type":"reset"}                                                     a citation check failed: the text so far
+                                                                           is void and the model writes it again
+      {"type":"done","result":{...}}                                       the final answer, as /api/ask returns it
+      {"type":"error","detail":"..."}                                      the answer could not be produced
+    A bad corpus or sign-in is an ordinary HTTP error, before the stream starts."""
+    t0 = perf_counter()
+    corpus = None if DEMO else _ask_corpus(req, user)
+    events: queue.Queue = queue.Queue()
+
+    def on_event(name: str, data: dict) -> None:
+        if name == "route":
+            events.put({"type": "route", "path": _path_key(data["path_used"]), "path_label": data["path_used"],
+                        "classified": data.get("classified"), "confidence": data.get("confidence")})
+        else:
+            events.put({"type": name})
+
+    def work() -> None:
+        try:
+            if DEMO:   # sample answer, written out word by word like a live one
+                raw = demo.demo_answer(req.question)
+                for piece in re.findall(r"\S+\s*", raw.get("answer", "")):
+                    events.put({"type": "token", "text": piece})
+                events.put({"type": "done", "result": shape_answer(raw, perf_counter() - t0, is_demo=True)})
+                return
+            with meter.meter() as m:
+                try:
+                    from src.answer import answer
+                    raw = answer(req.question.strip(), corpus,
+                                 on_token=lambda piece: events.put({"type": "token", "text": piece}),
+                                 on_event=on_event)
+                except Exception:  # noqa: BLE001 - log the details, show the user a generic message
+                    log.exception("answer() failed")
+                    _record_ask(user, req.corpus_id, m, None, perf_counter() - t0)
+                    events.put({"type": "error", "detail": _ANSWER_FAILED})
+                    return
+            _record_ask(user, req.corpus_id, m, raw, perf_counter() - t0)
+            events.put({"type": "done", "result": shape_answer(raw, perf_counter() - t0)})
+        except Exception:  # noqa: BLE001 - never leave the reader waiting on a dead worker
+            log.exception("streamed answer failed")
+            events.put({"type": "error", "detail": _ANSWER_FAILED})
+        finally:
+            events.put(None)
+
+    # A closed browser tab doesn't stop the worker: the question is finished and its usage recorded as normal.
+    threading.Thread(target=work, daemon=True, name="ask-stream").start()
+
+    def lines():
+        while (event := events.get()) is not None:
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _account_of(email: str | None) -> str | None:

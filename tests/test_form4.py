@@ -154,3 +154,47 @@ def test_empty_graph_result_falls_back_to_vector(monkeypatch):
     assert r["path_used"] == "VECTOR (graph found nothing)" and r["result"]["vector"]
     monkeypatch.setattr(router, "graph_path", lambda q, corpus=None: {"query_type": "risks_of", "rows": [{"risk": "x"}], "cypher": "M"})
     assert router.route("q")["path_used"] == "GRAPH"
+
+
+# ---- count questions go to the graph, without asking the router model ----
+
+def _router_without_model(monkeypatch):
+    import src.router as router
+
+    def no_model(stage="other"):
+        raise AssertionError("the router model must not be called for a count question")
+    monkeypatch.setattr(router, "chat_client", no_model)
+    monkeypatch.setattr(router.routerlog, "log", lambda rec: None)
+    return router
+
+
+def test_count_questions_are_graph_questions_decided_by_the_rule(monkeypatch):
+    router = _router_without_model(monkeypatch)
+    for q in ["How many candidates do we have?", "how many contracts mention Aldermoor?", "What is the number of clients?",
+              "Count the products in the catalog"]:
+        assert router.classify(q) == (router.Path.GRAPH, 0.95), q
+    # Everything else still goes to the model; lists in particular, because the graph cannot filter them.
+    for q in ["Which candidates know Python?", "Who is Apple's CEO?", "List all candidates in Lyon"]:
+        assert not router.is_count_question(q), q
+
+
+def test_a_count_question_runs_the_graph_only(monkeypatch):
+    router = _router_without_model(monkeypatch)
+    monkeypatch.setattr(router, "graph_path", lambda q, corpus=None: {"query_type": "count_of_type", "cypher": "M",
+                                                                      "rows": [{"type": "PERSON", "count": 4}]})
+
+    def no_vector(*a, **k):
+        raise AssertionError("vector search must not run when the graph has the count")
+    monkeypatch.setattr(router, "vector_path", no_vector)
+    r = router.route("How many candidates do we have?")
+    assert r["path_used"] == "GRAPH" and r["confidence"] == 0.95 and "vector" not in r["result"]
+
+
+def test_a_count_question_the_graph_cannot_answer_still_falls_back_to_the_text(monkeypatch):
+    router = _router_without_model(monkeypatch)
+    monkeypatch.setattr(router, "graph_path", lambda q, corpus=None: {"query_type": None, "cypher": None, "rows": []})
+    monkeypatch.setattr(router, "vector_path", lambda q, k=5, corpus=None: [{"chunk_id": "c1", "doc_id": "DOC-1",
+                                                                            "section_path": "x", "similarity": 0.8}])
+    r = router.route("How many days of leave does the policy give?")
+    assert r["path_used"] == "VECTOR (graph found nothing)" and r["result"]["vector"]
+

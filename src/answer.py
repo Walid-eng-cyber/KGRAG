@@ -310,9 +310,23 @@ def _scan_corpus(question: str, corpus: dict | None, skill: dict, have: set[str]
     return [r for r in rows if r["chunk_id"] not in have]
 
 
-def answer(question: str, corpus: dict | None = None, today: date | None = None) -> dict:
+def _streamed(pieces, on_token):
+    """Pass each piece of a model stream on as it arrives, and hand the pieces back."""
+    for piece in pieces:
+        on_token(piece)
+        yield piece
+
+
+def answer(question: str, corpus: dict | None = None, today: date | None = None, on_token=None, on_event=None) -> dict:
+    """The grounded, cited answer. With on_token the answer text is streamed to it piece by piece as the model
+    writes it; on_event("route", {...}) fires once the path is chosen and on_event("reset", {}) when a failed
+    citation check makes the model write the answer again (the streamed text so far is then void). The returned
+    dict is the same either way, and its "answer" is the final, validated text."""
     today = today or date.today()
     routed = route(question, corpus)
+    if on_event:
+        on_event("route", {"path_used": routed["path_used"], "classified": routed["classified"],
+                           "confidence": routed["confidence"]})
     res = routed["result"]
     graph_result = res.get("graph", {}) if "graph" in res else {}
 
@@ -411,7 +425,12 @@ def answer(question: str, corpus: dict | None = None, today: date | None = None)
     text, invalid, uncited, attempts = "", [], [], 0
     for attempts in range(1, config.ANSWER_MAX_RETRIES + 2):
         client.stage = "answer" if attempts == 1 else "retry"
-        text = client.chat(model=config.ANSWER_MODEL, messages=messages)["message"]["content"].strip()
+        if on_token:
+            if attempts > 1 and on_event:
+                on_event("reset", {})
+            text = "".join(_streamed(client.chat_stream(model=config.ANSWER_MODEL, messages=messages), on_token)).strip()
+        else:
+            text = client.chat(model=config.ANSWER_MODEL, messages=messages)["message"]["content"].strip()
         invalid, uncited = validate_citations(text, valid_tags)
         empty = len(_CITE.sub(" ", text).split()) < 2          # e.g. just "[G1]"
         meta = bool(_META.search(text))                         # talks about our rules instead of answering

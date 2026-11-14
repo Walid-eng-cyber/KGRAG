@@ -538,3 +538,10 @@ table.accounts.compact td, table.accounts.compact th { padding-top: 6px; padding
 .doc-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
 .doc-page-break { font-size: 11px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted-2);
   border-top: 1px solid var(--border); padding-top: 10px; margin: 6px 0 10px; }
+
+/* ---------- streaming answer (components/LiveAnswer.tsx) ---------- */
+.caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 3px; vertical-align: text-bottom; border-radius: 1px;
+  background: var(--graph); animation: caret-blink 1s steps(2, start) infinite; }
+@keyframes caret-blink { to { visibility: hidden; } }
+.live-note { font-size: 13px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .caret { animation: none; } }

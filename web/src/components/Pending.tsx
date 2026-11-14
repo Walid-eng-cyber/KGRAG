@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 /** Waiting state for a local-model answer (typically 20–40 s). */
-export function Pending({ demo }: { demo: boolean }) {
+export function Pending({ demo, routed }: { demo: boolean; routed?: string | null }) {
   const [secs, setSecs] = useState(0);
   useEffect(() => {
     const t0 = Date.now();
@@ -15,7 +15,7 @@ export function Pending({ demo }: { demo: boolean }) {
       </svg>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span className="step-v">
-          Running the pipeline{demo ? "" : " on local models"} · <span className="mono">{secs}s</span>
+          {routed ? `Routed to ${routed} · the answer starts in a moment` : `Running the pipeline${demo ? "" : " on local models"}`} · <span className="mono">{secs}s</span>
           {!demo && <span className="muted"> (usually 20–40 s)</span>}
         </span>
         <div className="pending-steps" aria-hidden="true">

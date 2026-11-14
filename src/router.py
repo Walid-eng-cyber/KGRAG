@@ -90,6 +90,18 @@ _VECTOR = re.compile(
     r"|policy regarding|approach to|who is|when did|where is)\b", re.I)
 
 
+# Questions that ask for a count. The answer needs every matching entity, which only the graph has: vector
+# search returns the 5 most similar chunks, so it would stop counting at 5 and miss the rest. Clear enough
+# that the model is not consulted (it once said VECTOR at 0.59, the disagreement dropped confidence, and
+# the question ran on both paths for nothing). "List all ..." is left to the model on purpose: the graph
+# can list a whole type but cannot filter it ("... in Lyon"), so the text has to stay in play there.
+_COUNT = re.compile(r"\b(how many|number of|count of|count the)\b", re.I)
+
+
+def is_count_question(q: str) -> bool:
+    return bool(_COUNT.search(q))
+
+
 def _heuristic(q: str) -> Path | None:
     """A cheap rule guess used only to cross-check the model.
     GRAPH is checked first: a possessive multi-hop like "Apple's suppliers"
@@ -102,6 +114,8 @@ def _heuristic(q: str) -> Path | None:
 
 
 def classify(question: str) -> tuple[Path, float]:
+    if is_count_question(question):
+        return Path.GRAPH, 0.95      # decided by the rule: no router-model call, no tokens
     messages = [{"role": "system", "content": SYSTEM}]
     for q, a in FEWSHOT:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
@@ -195,6 +209,7 @@ def route(question: str, corpus: dict | None = None) -> dict:
     routerlog.log({
         "question": question,
         "classified": path.value,
+        "decided_by": "rule" if is_count_question(question) else "model",
         "confidence": round(conf, 2),
         "low_confidence": low,
         "path_used": chosen,

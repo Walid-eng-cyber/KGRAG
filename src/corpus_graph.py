@@ -379,6 +379,12 @@ TYPE_SYNONYMS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Nouns that mean a PERSON in a question ("how many candidates"). Kept apart from TYPE_SYNONYMS because words
+# like "who" would otherwise claim PERSON in every question; these only count when nothing else matched.
+_PERSON_NOUNS = ("candidate", "applicant", "employee", "worker", "person", "people", "profile",
+                 "kandidat", "bewerber", "mitarbeiter")
+
+
 def guess_type(question: str, allowed: list[str]) -> str | None:
     """The schema type a question asks about, from its words. None if unclear."""
     q = question.lower()
@@ -388,7 +394,11 @@ def guess_type(question: str, allowed: list[str]) -> str | None:
         pos = min((q.find(w) for w in words if w in q), default=-1)
         if pos >= 0 and t != "PERSON":
             hits.append((pos, t))
-    return min(hits)[1] if hits else None
+    if hits:
+        return min(hits)[1]
+    if "PERSON" in allowed and any(re.search(rf"\b{w}", q) for w in _PERSON_NOUNS):
+        return "PERSON"
+    return None
 
 
 def guess_relation(question: str, allowed: list[str]) -> str | None:

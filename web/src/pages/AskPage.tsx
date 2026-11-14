@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { AnswerCard } from "../components/AnswerCard";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { LiveAnswer } from "../components/LiveAnswer";
 import { Pending } from "../components/Pending";
 import { RoutingTrace } from "../components/RoutingTrace";
 import { Glyph } from "../components/Shape";
@@ -75,6 +76,8 @@ export function AskPage({ meta, corpus, profile, onNewCorpus }: Props) {
   const [result, setResult] = useState<AskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // The answer while it is being written (null when no question is running).
+  const [live, setLive] = useState<{ text: string; route: string | null; revising: boolean } | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
 
@@ -88,14 +91,22 @@ export function AskPage({ meta, corpus, profile, onNewCorpus }: Props) {
     setLoading(true);
     setError(null);
     setSelectedTag(null);
+    setLive({ text: "", route: null, revising: false });
     try {
-      setResult(await api.ask(text, corpus?.id ?? null, ctrl.signal));
+      await api.askStream(text, corpus?.id ?? null, (ev) => {
+        if (ctrl.signal.aborted) return;
+        if (ev.type === "route") setLive((l) => l && { ...l, route: ev.path_label });
+        else if (ev.type === "token") setLive((l) => l && { ...l, text: l.text + ev.text, revising: false });
+        else if (ev.type === "reset") setLive((l) => l && { ...l, text: "", revising: true });
+        else if (ev.type === "done") setResult(ev.result);
+        else if (ev.type === "error") throw new ApiError(ev.detail, 0);
+      }, ctrl.signal);
     } catch (e) {
       if (ctrl.signal.aborted) return;
       setError(e instanceof ApiError ? e.message : String(e));
       setResult(null);
     } finally {
-      if (abort.current === ctrl) setLoading(false);
+      if (abort.current === ctrl) { setLoading(false); setLive(null); }
     }
   }
 
@@ -122,7 +133,7 @@ export function AskPage({ meta, corpus, profile, onNewCorpus }: Props) {
           autoComplete="off"
           autoFocus
         />
-        {loading && <button type="button" className="btn ghost" onClick={() => { abort.current?.abort(); setLoading(false); }}>Cancel</button>}
+        {loading && <button type="button" className="btn ghost" onClick={() => { abort.current?.abort(); setLoading(false); setLive(null); }}>Cancel</button>}
         <button className="btn" type="submit" disabled={!canAsk || loading || question.trim().length < 3}>Ask</button>
       </form>
       <div className="chips" aria-label="Example questions">
@@ -134,7 +145,10 @@ export function AskPage({ meta, corpus, profile, onNewCorpus }: Props) {
         ))}
       </div>
 
-      {loading && <Pending demo={!!meta?.demo} />}
+      {loading && !live?.text && !live?.revising && <Pending demo={!!meta?.demo} routed={live?.route} />}
+      {loading && live && (live.text || live.revising) && (
+        <LiveAnswer text={live.text} route={live.route} revising={live.revising} model={meta?.models.answer ?? "answer model"} />
+      )}
       {error && !loading && <div className="card error" role="alert">{error}</div>}
       {!loading && !error && !result && <EmptyState corpus={corpus} profile={profile} demo={!!meta?.demo} onNewCorpus={onNewCorpus} />}
       {result && !loading && (

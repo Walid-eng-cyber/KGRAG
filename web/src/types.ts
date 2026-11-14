@@ -150,6 +150,14 @@ export interface DocumentContent {
   truncated: boolean;
 }
 
+/** One line of the streaming answer (POST /api/ask/stream). */
+export type AskEvent =
+  | { type: "route"; path: RoutePath; path_label: string; classified: string | null; confidence: number | null }
+  | { type: "token"; text: string }
+  | { type: "reset" }
+  | { type: "done"; result: AskResponse }
+  | { type: "error"; detail: string };
+
 export interface Example {
   label: string;
   path: RoutePath;

@@ -1,7 +1,9 @@
 import type {
-  Account, AccountOverview, AccountStatus, AskResponse, Benchmark, Billing, ClientAccount, Corpus, CorpusInput,
+  Account, AccountOverview, AccountStatus, AskEvent, AskResponse, Benchmark, Billing, ClientAccount, Corpus, CorpusInput,
   CorpusProfile, DocumentContent, DocumentInfo, Health, Meta, Preset, UsageReport, User,
 } from "./types";
+
+import { drainNdjson } from "./lib/ndjson";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -13,25 +15,67 @@ export class ApiError extends Error {
 // UI is hosted elsewhere (e.g. Netlify) and the API runs on another domain.
 const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
+const UNREACHABLE = "Can't reach the KGRAG API. Is `uvicorn server.main:app` running on :8000?";
+
+/** The ApiError for a non-2xx response (and the sign-out signal for a 401). */
+async function failure(res: Response): Promise<ApiError> {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+  } catch {
+    /* keep statusText */
+  }
+  if (res.status === 401) window.dispatchEvent(new Event("kgrag:signed-out"));
+  return new ApiError(detail, res.status);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, { credentials: "include", ...init });
   } catch {
-    throw new ApiError("Can't reach the KGRAG API. Is `uvicorn server.main:app` running on :8000?", 0);
+    throw new ApiError(UNREACHABLE, 0);
   }
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch {
-      /* keep statusText */
-    }
-    if (res.status === 401) window.dispatchEvent(new Event("kgrag:signed-out"));
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok) throw await failure(res);
   return res.json() as Promise<T>;
+}
+
+/** Ask a question and receive the answer as it is written: onEvent gets route, token, reset and finally done. */
+async function askStream(question: string, corpusId: string | null, onEvent: (e: AskEvent) => void,
+  signal?: AbortSignal): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/api/ask/stream`, {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, corpus_id: corpusId }), signal,
+    });
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    throw new ApiError(UNREACHABLE, 0);
+  }
+  if (!res.ok) throw await failure(res);
+  if (!res.body) throw new ApiError("This browser can't show the answer as it is written.", 0);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finished = false;
+  const deliver = (events: unknown[]) => {
+    for (const e of events as AskEvent[]) {
+      if (e.type === "done" || e.type === "error") finished = true;
+      onEvent(e);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const drained = drainNdjson(buffer + decoder.decode(value, { stream: true }));
+    buffer = drained.rest;
+    deliver(drained.events);
+  }
+  deliver(drainNdjson(buffer + decoder.decode() + "\n").events);   // a last line without its newline
+  if (!finished) throw new ApiError("The answer stopped before it was finished. Try asking again.", 0);
 }
 
 export const api = {
@@ -98,6 +142,7 @@ export const api = {
       { method: "DELETE" }),
   health: () => request<Health>("/api/health"),
   benchmark: () => request<Benchmark>("/api/benchmark"),
+  askStream,
   ask: (question: string, corpusId: string | null, signal?: AbortSignal) =>
     request<AskResponse>("/api/ask", {
       method: "POST",

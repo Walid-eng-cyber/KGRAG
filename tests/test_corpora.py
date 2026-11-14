@@ -277,3 +277,14 @@ def test_stems_let_prefixes_match_other_word_forms():
     from src.vectorize import stem
     assert stem("turnens") == "turn" and stem("deutschen") == "deutsch" and stem("projects") == "project"
     assert stem("python") == "python" and stem("ects") == "ects"
+
+
+def test_people_nouns_resolve_to_person_when_the_planner_invents_a_type():
+    from src.corpus_graph import guess_type
+    from src.corpus_schema import from_preset
+    allowed = from_preset("career")["entities"]
+    for q in ["How many candidates do we have?", "how many applicants are there", "Wie viele Bewerber gibt es?"]:
+        assert guess_type(q, allowed) == "PERSON", q
+    assert guess_type("How many companies did they work at?", allowed) == "ORGANIZATION"   # a clear type still wins
+    assert guess_type("Who is the best match?", allowed) is None                          # "who" alone is not enough
+
