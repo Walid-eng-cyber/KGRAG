@@ -98,17 +98,10 @@ def triples_from(node) -> tuple[list[dict], list[dict]]:
     return list(ents.values()), rels
 
 
-def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Progress) -> dict:
-    """Extract a corpus-scoped graph from `text`, then embed its chunks into pgvector."""
-    from llama_index.core import Document, Settings
-    from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
+def _split(doc_id: str, title: str, text: str) -> list:
+    """The document cut into chunks (TextNodes with stable ids), the same way for both ingest modes."""
+    from llama_index.core import Document
     from llama_index.core.node_parser import SentenceSplitter
-
-    from src.corpus_schema import extraction_hint
-    from src.ingest import build_llm
-
-    schema = corpus["schema"]
-    text = text[: config.MAX_FILING_CHARS]
     from llama_index.core.schema import TextNode
 
     from src.chunking import chunk_texts, strip_boilerplate
@@ -124,45 +117,108 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
             pieces += splitter.split_text(part) if len(part) > CHUNK_SIZE * 4 else [part]
     else:
         pieces = splitter.split_text(clean)
-    chunks = [TextNode(id_=_chunk_id(i, doc), text=t, metadata={"title": title}) for i, t in enumerate(pieces)]
+    return [TextNode(id_=_chunk_id(i, doc), text=t, metadata={"title": title}) for i, t in enumerate(pieces)]
+
+
+def _extract_fast(chunks: list, hint: str, schema: dict, progress: Progress) -> dict[str, tuple[list[dict], list[dict]]]:
+    """One schema-constrained extraction call per chunk (LlamaIndex's SchemaLLMPathExtractor)."""
+    from llama_index.core import Settings
+    from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
+
+    from src.ingest import build_llm
+    total = len(chunks)
+    eta = max(1, round(total * config.SECONDS_PER_CHUNK / 60))
+    progress(f"Extracting graph: 0/{total} chunks (about {eta} min)", 0.0)
+    out: dict[str, tuple[list[dict], list[dict]]] = {}
+    for i in range(0, total, BATCH):
+        batch = chunks[i:i + BATCH]
+        # The extractor sees the hint, but the stored/embedded chunk text never contains it.
+        prompts = [c.model_copy(update={"text": f"{hint}\n\n{c.text}"}) for c in batch]
+        for c in prompts:
+            c.metadata.pop(KG_NODES_KEY, None)
+            c.metadata.pop(KG_RELATIONS_KEY, None)
+        llm = build_llm()   # fresh client per batch: each extractor call runs in a new event loop
+        Settings.llm = llm
+        extracted = build_extractor(llm, schema)(prompts)
+        for chunk, node in zip(batch, extracted):
+            out[chunk.node_id] = triples_from(node)
+        done = min(i + BATCH, total)
+        progress(f"Extracting graph: {done}/{total} chunks", 0.85 * done / total)
+    return out
+
+
+def _extract_detailed(chunks: list, hint: str, schema: dict, title: str,
+                      progress: Progress) -> tuple[dict[str, tuple[list[dict], list[dict]]], dict]:
+    """Whole document in view, then "what did you miss?", then every fact checked (src/deep_extract.py)."""
+    from src import deep_extract
+    pairs = [(c.node_id, c.text) for c in chunks]
+    progress(f"Detailed extraction of {len(chunks)} chunks (3 passes)", 0.0)
+    ext = deep_extract.extract_document(title, pairs, schema, hint, progress=progress)
+    return deep_extract.per_chunk(ext, pairs), ext.stats
+
+
+def _write_graph(corpus_id: str, doc_id: str, title: str, chunks: list,
+                 found: dict[str, tuple[list[dict], list[dict]]]) -> tuple[int, int]:
+    """Write the chunks and what was extracted from each. Returns (entities, relations) written."""
+    ensure_schema()
+    d = _driver()
+    entities = relations = 0
+    try:
+        with d.session() as s:
+            for chunk in chunks:
+                ents, rels = found.get(chunk.node_id, ([], []))
+                s.run(_WRITE_CHUNK, id=chunk.node_id, corpus=corpus_id, doc_id=doc_id, title=title,
+                      text=chunk.text).consume()
+                if ents:
+                    s.run(_WRITE_ENTITIES, rows=ents, corpus=corpus_id, chunk=chunk.node_id).consume()
+                if rels:
+                    s.run(_WRITE_RELATIONS, rows=rels, corpus=corpus_id, chunk=chunk.node_id).consume()
+                entities, relations = entities + len(ents), relations + len(rels)
+    finally:
+        d.close()
+    return entities, relations
+
+
+def extract(corpus: dict, doc_id: str, title: str, text: str, progress: Progress,
+            mode: str | None = None) -> tuple[list, dict[str, tuple[list[dict], list[dict]]], dict, str]:
+    """The model work of ingestion, nothing written: (chunks, chunk id -> (entities, relations), detail stats,
+    mode). Used by ingest_text, and on its own for a dry run (python -m src.rebuild_graph --dry-run)."""
+    from src.corpus_schema import extraction_hint
+
+    mode = (mode or config.INGEST_MODE).lower()
+    if mode not in {"fast", "detailed"}:
+        raise ValueError(f"Unknown ingest mode {mode!r}: use 'fast' or 'detailed'.")
+    schema = corpus["schema"]
+    text = text[: config.MAX_FILING_CHARS]
+    chunks = _split(doc_id, title, text)
     hint = extraction_hint(schema, corpus["name"], corpus.get("description", ""))
     # Layout chunks are short: a project's chunk doesn't repeat the person's name at the top of the CV.
     # Tell the extractor which document (and whose) each chunk comes from; the stored text stays as is.
     first_line = next((l.strip() for l in text.splitlines() if l.strip()), "")[:100]
     hint += (f"\nThis passage is part of the document “{title}”, which begins with: “{first_line}”. "
              "Facts in it are about that document's subject unless the passage names someone else.")
-    total = len(chunks)
-    eta = max(1, round(total * config.SECONDS_PER_CHUNK / 60))
-    progress(f"Extracting graph: 0/{total} chunks (about {eta} min)", 0.0)
-    ensure_schema()
+    if mode == "detailed":
+        found, detail = _extract_detailed(chunks, hint, schema, title, progress)
+    else:
+        found, detail = _extract_fast(chunks, hint, schema, progress), {}
+    return chunks, found, detail, mode
 
-    d = _driver()
-    entities = relations = 0
-    try:
-        for i in range(0, total, BATCH):
-            batch = chunks[i:i + BATCH]
-            # The extractor sees the hint, but the stored/embedded chunk text never contains it.
-            prompts = [c.model_copy(update={"text": f"{hint}\n\n{c.text}"}) for c in batch]
-            for c in prompts:
-                c.metadata.pop(KG_NODES_KEY, None)
-                c.metadata.pop(KG_RELATIONS_KEY, None)
-            llm = build_llm()   # fresh client per batch: each extractor call runs in a new event loop
-            Settings.llm = llm
-            extracted = build_extractor(llm, schema)(prompts)
-            with d.session() as s:
-                for chunk, out in zip(batch, extracted):
-                    ents, rels = triples_from(out)
-                    s.run(_WRITE_CHUNK, id=chunk.node_id, corpus=corpus["id"], doc_id=doc_id, title=title,
-                          text=chunk.text).consume()
-                    if ents:
-                        s.run(_WRITE_ENTITIES, rows=ents, corpus=corpus["id"], chunk=chunk.node_id).consume()
-                    if rels:
-                        s.run(_WRITE_RELATIONS, rows=rels, corpus=corpus["id"], chunk=chunk.node_id).consume()
-                    entities, relations = entities + len(ents), relations + len(rels)
-            done = min(i + BATCH, total)
-            progress(f"Extracting graph: {done}/{total} chunks", 0.85 * done / total)
-    finally:
-        d.close()
+
+def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Progress,
+                mode: str | None = None, replace: bool = False) -> dict:
+    """Extract a corpus-scoped graph from `text`, then embed its chunks into pgvector.
+
+    mode is "fast" or "detailed" (default: INGEST_MODE). With replace=True the document's existing graph,
+    vectors and tables are removed first, but only once extraction has succeeded: a failed rebuild leaves the
+    old graph in place."""
+    schema = corpus["schema"]
+    text = text[: config.MAX_FILING_CHARS]
+    chunks, found, detail, mode = extract(corpus, doc_id, title, text, progress, mode)
+
+    if replace:
+        progress("Replacing the previous graph of this document", 0.86)
+        remove_document(corpus["id"], doc_id)
+    entities, relations = _write_graph(corpus["id"], doc_id, title, chunks, found)
 
     progress("Cleaning up entities (types, duplicates)", 0.88)
     resolve_corpus(corpus["id"], schema)
@@ -171,7 +227,10 @@ def ingest_text(corpus: dict, doc_id: str, title: str, text: str, progress: Prog
     progress("Reading tables", 0.96)
     from src import tables
     n_tables = tables.ingest(corpus["id"], doc_id, title, text)
-    return {"chunks": total, "entities": entities, "relations": relations, "tables": n_tables}
+    out = {"chunks": len(chunks), "entities": entities, "relations": relations, "tables": n_tables, "mode": mode}
+    if detail:
+        out["detail"] = detail
+    return out
 
 
 # ---------------------------------------------------------------------------

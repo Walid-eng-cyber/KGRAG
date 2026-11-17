@@ -156,6 +156,17 @@ class MeteredClient:
         return getattr(self.inner, name)
 
 
+def extract_client(stage: str = "extract"):
+    """A metered client for graph extraction: the hosted provider when one is set, else the Ollama server at
+    EXTRACT_OLLAMA_URL (which may be another, stronger machine), with a timeout long enough for a big model."""
+    if is_hosted():
+        inner = OpenAICompatClient(config.LLM_BASE_URL, config.LLM_API_KEY, float(config.DETAILED_TIMEOUT_S))
+    else:
+        import ollama
+        inner = ollama.Client(host=config.EXTRACT_OLLAMA_URL, timeout=float(config.DETAILED_TIMEOUT_S))
+    return MeteredClient(inner, stage)
+
+
 def chat_client(stage: str = "other"):
     """A client with Ollama's `.chat(model=, messages=, format=)` interface, metered."""
     if is_hosted():

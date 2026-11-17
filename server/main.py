@@ -478,10 +478,11 @@ def _ingest(doc: dict, text: str, progress) -> dict:
 
 
 def _record_ingest(doc: dict, m: meter.Meter, out: dict | None, text: str, latency_s: float) -> None:
-    """Extraction runs through LlamaIndex, which doesn't hand back token counts: estimate them
-    from the text the same way src/budget.py does before a run, and mark the row as estimated."""
+    """Fast extraction runs through LlamaIndex, which doesn't hand back token counts: estimate them
+    from the text the same way src/budget.py does before a run, and mark the row as estimated.
+    Detailed extraction (INGEST_MODE=detailed) calls the model itself, so its calls are already metered."""
     from src.budget import estimate
-    if out is not None:
+    if out is not None and out.get("mode") != "detailed":
         est = estimate(text[: config.MAX_FILING_CHARS])
         m.calls.append(meter.LLMCall("extract", config.EXTRACT_MODEL, est["input_tokens"],
                                      est["output_tokens"], latency_s * 1000, estimated=True))

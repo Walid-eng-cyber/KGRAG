@@ -87,6 +87,20 @@ DEFAULT_MONTHLY_CREDIT_EUR = float(os.getenv("DEFAULT_MONTHLY_CREDIT_EUR", "2500
 SECONDS_PER_CHUNK = float(os.getenv("SECONDS_PER_CHUNK", "20.0"))
 EXTRACTION_TIMEOUT_S = int(os.getenv("EXTRACTION_TIMEOUT_S", "240"))  # per model call while extracting
 
+# --- Graph building (ingest) on another machine, in more detail ---
+# The Ollama server that builds the graph. Point it at a stronger machine (e.g. a PC with a GPU running
+# `OLLAMA_HOST=0.0.0.0 ollama serve`) so ingestion never queues behind people asking questions here.
+EXTRACT_OLLAMA_URL = os.getenv("EXTRACT_OLLAMA_URL", "").strip() or OLLAMA_BASE_URL
+# "fast": one extraction call per ~512-token chunk (the original pipeline).
+# "detailed": the whole document in view, then "what did you miss?", then every fact checked against the
+# sentence it came from (src/deep_extract.py). About 3 model calls per document; slower, more complete and exact.
+INGEST_MODE = os.getenv("INGEST_MODE", "fast").strip().lower()
+# Detailed mode: context window per call (tokens), document text per call (chars), and a per-call timeout
+# generous enough for a large model that runs partly on the CPU.
+EXTRACT_NUM_CTX = int(os.getenv("EXTRACT_NUM_CTX", "16384"))
+DETAILED_WINDOW_CHARS = int(os.getenv("DETAILED_WINDOW_CHARS", "24000"))
+DETAILED_TIMEOUT_S = int(os.getenv("DETAILED_TIMEOUT_S", "900"))
+
 # How documents are cut into chunks at ingest: "sentence" (~512-token pieces, default) or "layout"
 # (sections and dated entries kept whole; see src/chunking.py).
 CHUNKING = os.getenv("CHUNKING", "sentence").strip().lower()

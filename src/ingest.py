@@ -57,7 +57,7 @@ def build_llm():
         )
     return Ollama(
         model=config.EXTRACT_MODEL,
-        base_url=config.OLLAMA_BASE_URL,
+        base_url=config.EXTRACT_OLLAMA_URL,
         # Local models are slower than a hosted API — give each call room.
         request_timeout=float(config.EXTRACTION_TIMEOUT_S),
         context_window=4096,
